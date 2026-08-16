@@ -2,7 +2,7 @@
 
 A dsh plugin that adds an "Install" tab to the Web UI's Settings page, so any dsh plugin can be installed by npm spec without leaving the app.
 
-一个 dsh 插件：在 Web UI 的设置页中新增「安装」标签页，可按 npm spec 安装任意 dsh 插件，无需借助插件市场，也无需使用命令行。`dsh web` 与 DSH Desktop 均可使用。
+一个 dsh 插件：在 Web UI 的设置页中新增「安装」标签页，可按 npm spec 安装任意 dsh 插件，无需借助插件市场，也无需使用命令行。在 `dsh web` 里用上面的命令安装；桌面客户端 [DSH Desktop](https://github.com/qinyre/dsh-Desktop) 则开箱预装了这个标签页，装好即用。
 
 ## 安装
 
