@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-install",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Install any dsh plugin by npm spec — right inside Settings. · 在设置页里按包名安装任意 dsh 插件（不经过插件市场）。",
   "type": "module",
   "main": "lib/index.js",
@@ -14,7 +14,14 @@
     "url": "https://github.com/qinyre/dsh-plugin-install/issues"
   },
   "homepage": "https://github.com/qinyre/dsh-plugin-install#readme",
-  "keywords": ["deepseek", "harness", "dsh", "dsh-plugin", "plugin-manager", "install"],
+  "keywords": [
+    "deepseek",
+    "harness",
+    "dsh",
+    "dsh-plugin",
+    "plugin-manager",
+    "install"
+  ],
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
@@ -36,7 +43,12 @@
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
-  "files": ["lib", "src", "cordis.patch.yml", "LICENSE"],
+  "files": [
+    "lib",
+    "src",
+    "cordis.patch.yml",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "node scripts/build-node.mjs && node scripts/build-client.mjs && node scripts/verify-bundle.mjs",
     "prepare": "node scripts/build-node.mjs && node scripts/build-client.mjs && node scripts/verify-bundle.mjs",
