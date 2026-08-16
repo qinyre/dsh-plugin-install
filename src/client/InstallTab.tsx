@@ -1,9 +1,17 @@
-/** Settings → Plugins “Install” tab: arbitrary-spec install + uninstall.
- * Pure presentation-layer: receives everything through injected props. */
+/** Settings → Plugins “Install” tab: third-party plugin install/uninstall.
+ * Pure presentation-layer: receives everything through injected props. The
+ * stylesheet rides the host's --dsw-* tokens (same design language as the
+ * plugin-inventory tab) so light and dark themes both stay correct. */
 
-import { useState } from 'react'
-import type { CSSProperties, ReactElement } from 'react'
-import { Button, Input, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
+import { useEffect, useState } from 'react'
+import type { ReactElement } from 'react'
+import {
+  Button,
+  IconDownloadOutline16,
+  IconRefreshOutline14,
+  Modal,
+  StateDot,
+} from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Translate } from './index.ts'
 
 /** Injected business face: HTTP calls to the installer host routes. */
@@ -34,39 +42,84 @@ export interface InstallOutcome {
   installed: string[]
 }
 
-/** One entry in the installed list. */
-export interface InstalledRow {
-  name: string
-}
+/** Scoped class prefix; the sheet is injected once with the tab. */
+const CSS = `
+.dpi-section{display:flex;flex-direction:column;gap:14px;width:100%;max-width:760px;color:var(--dsw-alias-label-primary)}
+.dpi-head{display:flex;align-items:center;gap:8px}
+.dpi-head h3{margin:0;font-size:13px;line-height:20px;font-weight:600}
+.dpi-mode{display:inline-flex;align-items:center;min-height:20px;border-radius:5px;padding:1px 6px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);font-size:11px;line-height:16px;white-space:nowrap}
+.dpi-intro{margin:0;font-size:13px;line-height:20px;color:var(--dsw-alias-label-tertiary)}
+.dpi-installRow{display:flex;gap:8px;align-items:center}
+.dpi-field{position:relative;flex:1;display:flex;align-items:center;color:var(--dsw-alias-label-tertiary)}
+.dpi-field>svg{position:absolute;left:12px;pointer-events:none}
+.dpi-field input{width:100%;height:36px;box-sizing:border-box;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:0 12px 0 34px;outline:none;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:13px}
+.dpi-field input::placeholder{color:var(--dsw-alias-label-tertiary)}
+.dpi-field input:focus-visible{border-color:var(--dsw-alias-state-business-primary);box-shadow:0 0 0 2px color-mix(in srgb,var(--dsw-alias-state-business-primary) 18%,transparent)}
+.dpi-progress{display:flex;align-items:center;gap:8px;min-height:20px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}
+.dpi-progressLine{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--ds-font-family-code)}
+.dpi-banner{display:flex;align-items:flex-start;gap:8px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:10px 12px;background:var(--dsw-alias-bg-layer-3)}
+.dpi-banner[data-kind='ok']{border-color:color-mix(in srgb,var(--dsw-alias-state-success-primary) 35%,transparent);background:color-mix(in srgb,var(--dsw-alias-state-success-primary) 8%,transparent)}
+.dpi-banner[data-kind='error']{border-color:color-mix(in srgb,var(--dsw-alias-state-error-primary) 35%,transparent);background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 8%,transparent)}
+.dpi-dot{flex:none;margin-top:5px}
+.dpi-bannerBody{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px;font-size:13px;line-height:20px}
+.dpi-bannerHint{display:flex;align-items:center;gap:8px;flex-wrap:wrap;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px}
+.dpi-errorText{margin:0;overflow-wrap:anywhere;font-family:var(--ds-font-family-code);font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}
+.dpi-listHead{display:flex;align-items:baseline;gap:7px;padding:0 2px;margin-top:2px}
+.dpi-listHead h3{margin:0;font-size:13px;line-height:20px;font-weight:600}
+.dpi-count{font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums}
+.dpi-spacer{flex:1}
+.dpi-refresh{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer}
+.dpi-refresh:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+.dpi-refresh:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:-2px}
+.dpi-empty{margin:0;font-size:13px;line-height:20px;color:var(--dsw-alias-label-tertiary)}
+.dpi-cards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:stretch;gap:10px;margin:0;padding:0;list-style:none}
+.dpi-card{display:flex;align-items:center;justify-content:space-between;gap:12px;min-width:0;min-height:52px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-3);padding:12px 12px 12px 14px}
+.dpi-card:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.dpi-cardTitle{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;line-height:20px;font-weight:600}
+@media(max-width:680px){.dpi-cards{grid-template-columns:minmax(0,1fr)}}
+`
 
 export function InstallTab(props: { t: Translate; injected: InstallTabInjected }): ReactElement {
   const { t, injected } = props
   const [spec, setSpec] = useState('')
-  const [installed, setInstalled] = useState<string[]>([])
+  const [installed, setInstalled] = useState<string[] | null>(null)
   const [busy, setBusy] = useState(false)
+  const [lastLine, setLastLine] = useState('')
   const [outcome, setOutcome] = useState<InstallOutcome | null>(null)
   const [confirmName, setConfirmName] = useState<string | null>(null)
+  const [reload, setReload] = useState(0)
 
-  const refresh = async (): Promise<void> => {
-    const status = await injected.status()
-    setInstalled(status.installed)
-    setBusy(status.active)
-  }
+  useEffect(() => {
+    let current = true
+    void injected.status().then(
+      (status) => { if (current) { setInstalled(status.installed); setBusy(status.active) } },
+      () => { if (current) setInstalled([]) },
+    )
+    return () => { current = false }
+  }, [injected, reload])
 
-  /** Keep the list fresh when the tab mounts and after each operation. */
-  void refresh()
+  // While an operation runs, poll the host for its live progress line.
+  useEffect(() => {
+    if (!busy) { setLastLine(''); return }
+    let current = true
+    const timer = setInterval(() => {
+      void injected.status().then(
+        (status) => { if (current) setLastLine(status.lastLine) },
+        () => undefined,
+      )
+    }, 1200)
+    return () => { current = false; clearInterval(timer) }
+  }, [busy, injected])
 
   const doInstall = async (): Promise<void> => {
     const trimmed = spec.trim()
-    if (trimmed === '' ) return
+    if (trimmed === '') return
     setBusy(true)
     setOutcome(null)
     try {
       const result = await injected.install(trimmed)
       setOutcome(result)
-      const status = await injected.status()
-      setInstalled(status.installed)
-      setBusy(status.active)
+      setInstalled(result.installed)
       if (result.ok) setSpec('')
     } finally {
       setBusy(false)
@@ -79,62 +132,87 @@ export function InstallTab(props: { t: Translate; injected: InstallTabInjected }
     try {
       const result = await injected.uninstall(confirmName)
       setOutcome(result)
-      const status = await injected.status()
-      setInstalled(status.installed)
+      setInstalled(result.installed)
     } finally {
       setBusy(false)
       setConfirmName(null)
     }
   }
 
-  const style: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 12 }
-
   return (
-    <div style={style}>
-      <h3>{t('title')}</h3>
-      <p>{t('intro')}</p>
+    <div className="dpi-section">
+      <style>{CSS}</style>
 
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-        <Input
-          placeholder={t('specPh')}
-          value={spec}
-          onChange={(event) => setSpec(event.target.value)}
-          onKeyDown={(event) => { if (event.key === 'Enter') void doInstall() }}
-          style={{ flex: 1 }}
-        />
+      <div className="dpi-head">
+        <h3>{t('title')}</h3>
+        <span className="dpi-mode">{injected.desktop ? t('desktopMode') : t('normalMode')}</span>
+      </div>
+      <p className="dpi-intro">{t('intro')}</p>
+
+      <div className="dpi-installRow">
+        <label className="dpi-field">
+          <IconDownloadOutline16 aria-hidden="true" />
+          <input
+            placeholder={t('specPh')}
+            value={spec}
+            onChange={(event) => setSpec(event.target.value)}
+            onKeyDown={(event) => { if (event.key === 'Enter') void doInstall() }}
+          />
+        </label>
         <Button variant="primary" disabled={busy || spec.trim() === ''} onClick={() => void doInstall()}>
           {busy ? t('installing') : t('install')}
         </Button>
-        {busy && <Button variant="ghost" onClick={() => void injected.cancel()}>{t('cancelOp')}</Button>}
       </div>
 
-      {outcome !== null && (
-        <div>
-          {outcome.ok ? (
-            <p>{t('success')} — {outcome.hot ? t('hotReady') : t('restartNeeded')}</p>
-          ) : (
-            <p>{t('failed')}{outcome.error !== undefined ? `: ${outcome.error}` : ''}</p>
-          )}
-          {!outcome.hot && outcome.ok && (
-            <p>
-              {injected.desktop
-                ? t('restartDesktopHint')
-                : <><span>{t('restartOtherHint')}</span>{' '}<Button variant="outline" size="sm" onClick={injected.restart}>{t('desktopRestart')}</Button></>}
-            </p>
-          )}
+      {busy && (
+        <div className="dpi-progress">
+          <StateDot state="ongoing" size={10} />
+          <span className="dpi-progressLine">{lastLine !== '' ? lastLine : t('installing')}</span>
+          <Button variant="ghost" size="sm" onClick={() => void injected.cancel()}>{t('cancelOp')}</Button>
         </div>
       )}
 
-      {busy && installed.length > 0 && (
-        <p style={{ fontSize: 12 }}>{installed.join(', ')}</p>
+      {outcome !== null && (
+        <div className="dpi-banner" data-kind={outcome.ok ? 'ok' : 'error'} role="status">
+          <StateDot className="dpi-dot" state={outcome.ok ? 'done' : 'error'} size={10} />
+          <div className="dpi-bannerBody">
+            {outcome.ok
+              ? <span>{t('success')} — {outcome.hot ? t('hotReady') : t('restartNeeded')}</span>
+              : <span>{t('failed')}</span>}
+            {!outcome.ok && outcome.error !== undefined && <p className="dpi-errorText">{outcome.error}</p>}
+            {outcome.ok && !outcome.hot && (
+              <span className="dpi-bannerHint">
+                {injected.desktop
+                  ? t('restartDesktopHint')
+                  : <>{t('restartOtherHint')}{' '}<Button variant="outline" size="sm" onClick={injected.restart}>{t('desktopRestart')}</Button></>}
+              </span>
+            )}
+          </div>
+        </div>
       )}
 
-      <h3>{t('refresh')}</h3>
-      {installed.length === 0 ? <p>{t('empty')}</p> : (
-        <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+      <div className="dpi-listHead">
+        <h3>{t('installedHeading')}</h3>
+        {installed !== null && <span className="dpi-count">{installed.length}</span>}
+        <span className="dpi-spacer" />
+        <button
+          type="button"
+          className="dpi-refresh"
+          aria-label={t('refresh')}
+          title={t('refresh')}
+          disabled={busy}
+          onClick={() => setReload((value) => value + 1)}
+        >
+          <IconRefreshOutline14 size={14} aria-hidden="true" />
+        </button>
+      </div>
+      {installed === null && <p className="dpi-empty">{t('loading')}</p>}
+      {installed !== null && installed.length === 0 && <p className="dpi-empty">{t('empty')}</p>}
+      {installed !== null && installed.length > 0 && (
+        <ul className="dpi-cards">
           {installed.map((name) => (
-            <li key={name} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-              <span>{name}</span>
+            <li className="dpi-card" key={name}>
+              <strong className="dpi-cardTitle" title={name}>{name}</strong>
               <Button variant="ghost" size="sm" disabled={busy} onClick={() => setConfirmName(name)}>
                 {t('uninstall')}
               </Button>

@@ -4,7 +4,7 @@
  * declared — keep in sync with the host package. */
 
 declare module '@deepseek-ai/dsh-client-ui-primitives' {
-  import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactElement, ReactNode } from 'react'
+  import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactElement, ReactNode, SVGProps } from 'react'
 
   export type ButtonVariant = 'primary' | 'ghost' | 'outline' | 'toolbar'
   export function Button(props: {
@@ -19,6 +19,24 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
     icon?: ReactNode
     className?: string
   } & InputHTMLAttributes<HTMLInputElement>): ReactElement
+
+  /** Four-color state dot; 'ongoing' renders the running ring. */
+  export type StateDotState = 'done' | 'warning' | 'ongoing' | 'error'
+  export function StateDot(props: {
+    state: StateDotState
+    size?: number | undefined
+    className?: string | undefined
+  }): ReactElement
+
+  export function IconDownloadOutline16(props: {
+    className?: string | undefined
+    size?: number | undefined
+  } & SVGProps<SVGSVGElement>): ReactElement
+
+  export function IconRefreshOutline14(props: {
+    className?: string | undefined
+    size?: number | undefined
+  } & SVGProps<SVGSVGElement>): ReactElement
 
   export function Modal(props: {
     open: boolean
