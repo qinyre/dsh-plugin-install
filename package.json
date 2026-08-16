@@ -39,6 +39,7 @@
   "files": ["lib", "src", "cordis.patch.yml", "LICENSE"],
   "scripts": {
     "build": "node scripts/build-node.mjs && node scripts/build-client.mjs && node scripts/verify-bundle.mjs",
+    "prepare": "node scripts/build-node.mjs && node scripts/build-client.mjs && node scripts/verify-bundle.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "bundle-check": "node scripts/verify-bundle.mjs"

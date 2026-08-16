@@ -6,21 +6,13 @@ A dsh plugin that adds an "Install" tab to the Web UI's Settings page, so any ds
 
 ## 安装
 
-还没有发到 npm。目前两种方式：
-
-本地路径安装（克隆或下载本仓库后）：
-
-```sh
-dsh plugin --profile web add file:/path/to/dsh-plugin-install
-```
-
-等发布到 npm 之后就是一句：
-
 ```sh
 dsh plugin --profile web add dsh-plugin-install
 ```
 
 装完打开 Web UI 的 设置 → 插件，多出来的「安装」Tab 就是它。卸载用同一个页面的按钮，或者 `dsh plugin --profile web remove dsh-plugin-install`。
+
+本地开发时可以直接装源码检出：`dsh plugin --profile web add file:/path/to/dsh-plugin-install`（包里的 prepare 脚本会自己构建出 `lib/`）。
 
 ## 它做了什么
 
