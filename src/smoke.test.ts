@@ -129,5 +129,22 @@ describe.skipIf(process.env.DSH_DESKTOP_PLUGIN_SMOKE !== '1' || !guard || !nodeO
     const body = await status.json() as { installed?: string[]; desktop?: boolean }
     expect(body.installed).toContain('dsh-plugin-install')
     expect(body.desktop).toBe(false)
+
+    // 5. Update checks: this package is installed via file: → linked, no
+    // network check, version read from node_modules.
+    const updates = await fetch(`http://127.0.0.1:${port}/dsh-plugin-install/updates?force=1`)
+    expect(updates.status).toBe(200)
+    const updatesBody = await updates.json() as { updates?: Record<string, { kind?: string; updateAvailable?: boolean; version?: string }> }
+    expect(updatesBody.updates?.['dsh-plugin-install']).toMatchObject({ kind: 'linked', updateAvailable: false })
+
+    // 6. Updating a linked plugin is refused with an actionable error.
+    const origin = `http://127.0.0.1:${port}`
+    const update = await fetch(`${origin}/dsh-plugin-install/update`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: origin, host: `127.0.0.1:${port}` },
+      body: JSON.stringify({ name: 'dsh-plugin-install' }),
+    })
+    expect(update.status).toBe(400)
+    expect(await update.json()).toMatchObject({ error: expect.stringContaining('checkout') as unknown })
   })
 })

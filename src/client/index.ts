@@ -3,13 +3,13 @@
  * host routes (/dsh-plugin-install/*), so it calls them with plain fetch. */
 
 import { createElement as h } from 'react'
-import { InstallTab, type InstallOutcome, type InstallStatus } from './InstallTab.tsx'
+import { InstallTab, type InstallOutcome, type InstallStatus, type UpdatesResponse } from './InstallTab.tsx'
 import { zh, en } from './locales.ts'
 
 /** Locale dictionary namespace owned by this plugin. */
 export const NS = 'settings.pluginInstall'
 
-export type { InstallTabInjected, InstallStatus, InstallOutcome } from './InstallTab.tsx'
+export type { InstallTabInjected, InstallStatus, InstallOutcome, UpdatesResponse } from './InstallTab.tsx'
 
 /** The `t` function bound by the locale service. */
 export interface Translate {
@@ -60,6 +60,14 @@ export function apply(ctx: InstallClientContext): void {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ spec }),
+        }),
+      checkUpdates: async (force = true): Promise<UpdatesResponse> =>
+        fetchJson<UpdatesResponse>(`/dsh-plugin-install/updates${force ? '?force=1' : ''}`),
+      update: async (name: string): Promise<InstallOutcome> =>
+        fetchJson<InstallOutcome>('/dsh-plugin-install/update', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ name }),
         }),
       uninstall: async (name: string): Promise<InstallOutcome> =>
         fetchJson<InstallOutcome>('/dsh-plugin-install/uninstall', {

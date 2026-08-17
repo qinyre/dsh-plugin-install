@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { runPlugin, progress, cancelActive, inDesktop } from './cli.ts'
 import { readInstalledBundles } from './profile.ts'
 import { parseSimplePatch, hotMount, hotUnmount, listHotMounts, cleanHotDir } from './hot.ts'
+import { invalidateUpdates } from './updates.ts'
 import type { InstallerHost } from './types.ts'
 
 /** Outcome of one install/uninstall, serialized to the browser. */
@@ -65,6 +66,7 @@ export async function installPlugin(
   const before = new Set(readInstalledBundles(profileDirPath))
   const result = await runPlugin(profile, ['add', spec])
   const ok = result.exitCode === 0 && !result.timedOut && !result.cancelled
+  if (ok) invalidateUpdates()
   let hot = false
   if (ok) hot = await tryHotMount(host, profileDirPath, before)
   return {
@@ -89,6 +91,7 @@ export async function uninstallPlugin(
 ): Promise<InstallOutcome> {
   const result = await runPlugin(profile, ['remove', name])
   const ok = result.exitCode === 0 && !result.timedOut && !result.cancelled
+  if (ok) invalidateUpdates()
   let unmounted = false
   if (ok) unmounted = await hotUnmount(name)
   return {

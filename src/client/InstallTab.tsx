@@ -18,6 +18,8 @@ import type { Translate } from './index.ts'
 export interface InstallTabInjected {
   status(): Promise<InstallStatus>
   install(spec: string): Promise<InstallOutcome>
+  checkUpdates(force?: boolean): Promise<UpdatesResponse>
+  update(name: string): Promise<InstallOutcome>
   uninstall(name: string): Promise<InstallOutcome>
   cancel(): Promise<void>
   restart(): void
@@ -40,6 +42,19 @@ export interface InstallOutcome {
   cancelled?: boolean
   error?: string
   installed: string[]
+}
+
+/** Server-side update check result for one installed plugin. */
+export interface UpdateStatus {
+  kind: 'npm' | 'github' | 'linked' | 'unknown'
+  version: string | null
+  current: string | null
+  latest: string | null
+  updateAvailable: boolean
+}
+
+export interface UpdatesResponse {
+  updates: Record<string, UpdateStatus>
 }
 
 /** Scoped class prefix; the sheet is injected once with the tab. */
@@ -74,18 +89,46 @@ const CSS = `
 .dpi-empty{margin:0;font-size:13px;line-height:20px;color:var(--dsw-alias-label-tertiary)}
 .dpi-cards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:stretch;gap:10px;margin:0;padding:0;list-style:none}
 .dpi-card{display:flex;align-items:center;justify-content:space-between;gap:12px;min-width:0;min-height:52px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-3);padding:12px 12px 12px 14px}
-.dpi-card:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.dpi-card:hover{background:var(--dsw-interactive-bg-hover)}
+.dpi-cardMain{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
 .dpi-cardTitle{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;line-height:20px;font-weight:600}
+.dpi-cardActions{display:flex;align-items:center;gap:6px;flex:none}
+.dpi-meta{display:inline-flex;align-items:center;gap:6px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:16px;color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums}
+.dpi-metaUpdate{color:var(--dsw-alias-state-success-primary);font-weight:600}
+.dpi-listActions{display:flex;align-items:center;gap:6px}
 @media(max-width:680px){.dpi-cards{grid-template-columns:minmax(0,1fr)}}
 `
+
+/** One installed card's version/update line; null before any check. */
+function CardMeta(props: { status: UpdateStatus | undefined; t: Translate }): ReactElement | null {
+  const { status, t } = props
+  if (status === undefined) return null
+  const version = status.version !== null ? `v${status.version}` : ''
+  if (status.kind === 'linked') {
+    return <span className="dpi-meta">{version !== '' ? `${version} · ` : ''}{t('linkedLocal')}</span>
+  }
+  if (status.updateAvailable) {
+    if (status.kind === 'github') return <span className="dpi-meta dpi-metaUpdate">{t('newCommits')}</span>
+    if (status.current !== null && status.latest !== null) {
+      return <span className="dpi-meta dpi-metaUpdate">v{status.current} → v{status.latest}</span>
+    }
+    return <span className="dpi-meta dpi-metaUpdate">{t('updateAvailable')}</span>
+  }
+  if (version !== '' && status.latest !== null) return <span className="dpi-meta">{version} · {t('upToDate')}</span>
+  if (version !== '') return <span className="dpi-meta">{version}</span>
+  return null
+}
 
 export function InstallTab(props: { t: Translate; injected: InstallTabInjected }): ReactElement {
   const { t, injected } = props
   const [spec, setSpec] = useState('')
   const [installed, setInstalled] = useState<string[] | null>(null)
+  const [updates, setUpdates] = useState<Record<string, UpdateStatus> | null>(null)
+  const [checking, setChecking] = useState(false)
   const [busy, setBusy] = useState(false)
   const [lastLine, setLastLine] = useState('')
   const [outcome, setOutcome] = useState<InstallOutcome | null>(null)
+  const [op, setOp] = useState<'install' | 'update' | 'uninstall'>('install')
   const [confirmName, setConfirmName] = useState<string | null>(null)
   const [reload, setReload] = useState(0)
 
@@ -115,12 +158,30 @@ export function InstallTab(props: { t: Translate; injected: InstallTabInjected }
     const trimmed = spec.trim()
     if (trimmed === '') return
     setBusy(true)
+    setOp('install')
     setOutcome(null)
     try {
       const result = await injected.install(trimmed)
       setOutcome(result)
       setInstalled(result.installed)
-      if (result.ok) setSpec('')
+      if (result.ok) {
+        setSpec('')
+        void doCheckUpdates(false)
+      }
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const doUpdate = async (name: string): Promise<void> => {
+    setBusy(true)
+    setOp('update')
+    setOutcome(null)
+    try {
+      const result = await injected.update(name)
+      setOutcome(result)
+      setInstalled(result.installed)
+      if (result.ok) void doCheckUpdates(false)
     } finally {
       setBusy(false)
     }
@@ -129,13 +190,35 @@ export function InstallTab(props: { t: Translate; injected: InstallTabInjected }
   const doUninstall = async (): Promise<void> => {
     if (confirmName === null) return
     setBusy(true)
+    setOp('uninstall')
     try {
       const result = await injected.uninstall(confirmName)
       setOutcome(result)
       setInstalled(result.installed)
+      if (result.ok) setUpdates(current => {
+        if (current === null) return null
+        const next = { ...current }
+        delete next[confirmName]
+        return next
+      })
     } finally {
       setBusy(false)
       setConfirmName(null)
+    }
+  }
+
+  // A fresh check after an operation re-reads the server cache, which the
+  // operation itself just invalidated; force=false is enough.
+  const doCheckUpdates = async (force = true): Promise<void> => {
+    if (checking || busy) return
+    setChecking(true)
+    try {
+      const response = await injected.checkUpdates(force)
+      setUpdates(response.updates)
+    } catch {
+      setUpdates({})
+    } finally {
+      setChecking(false)
     }
   }
 
@@ -177,14 +260,14 @@ export function InstallTab(props: { t: Translate; injected: InstallTabInjected }
           <StateDot className="dpi-dot" state={outcome.ok ? 'done' : 'error'} size={10} />
           <div className="dpi-bannerBody">
             {outcome.ok
-              ? <span>{t('success')} — {outcome.hot ? t('hotReady') : t('restartNeeded')}</span>
-              : <span>{t('failed')}</span>}
+              ? <span>{op === 'update' ? t('updateSuccess') : op === 'uninstall' ? t('uninstallSuccess') : t('success')} — {outcome.hot ? t('hotReady') : t('restartNeeded')}</span>
+              : <span>{op === 'update' ? t('updateFailed') : op === 'uninstall' ? t('uninstallFailed') : t('failed')}</span>}
             {!outcome.ok && outcome.error !== undefined && <p className="dpi-errorText">{outcome.error}</p>}
             {outcome.ok && !outcome.hot && (
               <span className="dpi-bannerHint">
                 {injected.desktop
-                  ? t('restartDesktopHint')
-                  : <>{t('restartOtherHint')}{' '}<Button variant="outline" size="sm" onClick={injected.restart}>{t('desktopRestart')}</Button></>}
+                  ? <Button variant="outline" size="sm" disabled={busy} onClick={injected.restart}>{t('desktopRestart')}</Button>
+                  : t('restartOtherHint')}
               </span>
             )}
           </div>
@@ -195,16 +278,29 @@ export function InstallTab(props: { t: Translate; injected: InstallTabInjected }
         <h3>{t('installedHeading')}</h3>
         {installed !== null && <span className="dpi-count">{installed.length}</span>}
         <span className="dpi-spacer" />
-        <button
-          type="button"
-          className="dpi-refresh"
-          aria-label={t('refresh')}
-          title={t('refresh')}
-          disabled={busy}
-          onClick={() => setReload((value) => value + 1)}
-        >
-          <IconRefreshOutline14 size={14} aria-hidden="true" />
-        </button>
+        <div className="dpi-listActions">
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={busy || checking || installed === null || installed.length === 0}
+            onClick={() => void doCheckUpdates()}
+          >
+            {checking ? t('checking') : t('checkUpdates')}
+          </Button>
+          {injected.desktop && (
+            <Button variant="ghost" size="sm" disabled={busy} onClick={injected.restart}>{t('desktopRestart')}</Button>
+          )}
+          <button
+            type="button"
+            className="dpi-refresh"
+            aria-label={t('refresh')}
+            title={t('refresh')}
+            disabled={busy}
+            onClick={() => setReload((value) => value + 1)}
+          >
+            <IconRefreshOutline14 size={14} aria-hidden="true" />
+          </button>
+        </div>
       </div>
       {installed === null && <p className="dpi-empty">{t('loading')}</p>}
       {installed !== null && installed.length === 0 && <p className="dpi-empty">{t('empty')}</p>}
@@ -212,10 +308,20 @@ export function InstallTab(props: { t: Translate; injected: InstallTabInjected }
         <ul className="dpi-cards">
           {installed.map((name) => (
             <li className="dpi-card" key={name}>
-              <strong className="dpi-cardTitle" title={name}>{name}</strong>
-              <Button variant="ghost" size="sm" disabled={busy} onClick={() => setConfirmName(name)}>
-                {t('uninstall')}
-              </Button>
+              <div className="dpi-cardMain">
+                <strong className="dpi-cardTitle" title={name}>{name}</strong>
+                <CardMeta status={updates?.[name]} t={t} />
+              </div>
+              <div className="dpi-cardActions">
+                {updates?.[name]?.updateAvailable === true && (
+                  <Button variant="primary" size="sm" disabled={busy} onClick={() => void doUpdate(name)}>
+                    {t('updateBtn')}
+                  </Button>
+                )}
+                <Button variant="ghost" size="sm" disabled={busy} onClick={() => setConfirmName(name)}>
+                  {t('uninstall')}
+                </Button>
+              </div>
             </li>
           ))}
         </ul>

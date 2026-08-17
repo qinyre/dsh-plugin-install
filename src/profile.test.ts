@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { readInstalledBundles, argvProfile, profileDir, isLocalLink } from './profile.ts'
+import { readInstalledBundles, readInstalledSpecs, readInstalledVersion, readLockCommits, argvProfile, profileDir, isLocalLink } from './profile.ts'
 
 describe('readInstalledBundles（可装清单 = bundles − 基线）', () => {
   it('filters the in-box baseline and returns user bundles', () => {
@@ -50,6 +50,60 @@ describe('isLocalLink', () => {
     expect(isLocalLink('/abs/x')).toBe(true)
     expect(isLocalLink('dsh-context')).toBe(false)
     expect(isLocalLink('github:user/repo')).toBe(false)
+  })
+})
+
+describe('readInstalledSpecs（bundles × dependencies）', () => {
+  it('returns the spec of every user bundle', () => {
+    const dir = mkFakeProfile(JSON.stringify({
+      dependencies: {
+        '@deepseek-ai/dsh-base': '1.0.0',
+        'dsh-context': '^1.2.0',
+        'my-plugin': 'github:user/repo#main',
+      },
+      dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', 'dsh-context', 'my-plugin'] } },
+    }))
+    expect(readInstalledSpecs(dir)).toEqual({ 'dsh-context': '^1.2.0', 'my-plugin': 'github:user/repo#main' })
+  })
+
+  it('skips bundles without a dependency entry and returns {} when malformed', () => {
+    const dir = mkFakeProfile(JSON.stringify({
+      dependencies: { 'dsh-context': '^1.0.0' },
+      dsh: { profile: { bundles: ['dsh-context', 'ghost'] } },
+    }))
+    expect(readInstalledSpecs(dir)).toEqual({ 'dsh-context': '^1.0.0' })
+    expect(readInstalledSpecs(mkFakeProfile('not json'))).toEqual({})
+  })
+})
+
+describe('readInstalledVersion', () => {
+  it('reads the version from node_modules', () => {
+    const dir = mkFakeProfile('{}')
+    mkdirSync(join(dir, 'node_modules', 'dsh-context'), { recursive: true })
+    writeFileSync(join(dir, 'node_modules', 'dsh-context', 'package.json'), '{"name":"dsh-context","version":"1.2.3"}', 'utf8')
+    expect(readInstalledVersion(dir, 'dsh-context')).toBe('1.2.3')
+  })
+
+  it('returns null when the manifest is missing', () => {
+    expect(readInstalledVersion(mkFakeProfile('{}'), 'nope')).toBeNull()
+  })
+})
+
+describe('readLockCommits', () => {
+  it('maps lowercase owner/repo to the pinned tarball sha', () => {
+    const dir = mkFakeProfile('{}')
+    writeFileSync(join(dir, 'pnpm-lock.yaml'), [
+      'dependencies:',
+      '  my-plugin:',
+      "    specifier: github:User/Repo#main",
+      '    version: https://codeload.github.com/User/Repo/tar.gz/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      "  other: https://codeload.github.com/other/repo/post/1.0.0",
+    ].join('\n'), 'utf8')
+    expect(readLockCommits(dir)).toEqual(new Map([['user/repo', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']]))
+  })
+
+  it('returns an empty map without a lockfile', () => {
+    expect(readLockCommits(mkFakeProfile('{}')).size).toBe(0)
   })
 })
 

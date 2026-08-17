@@ -7,7 +7,7 @@
 
 ![「安装」标签页](docs/images/screenshot-install.png)
 
-安装和卸载走的都是 `dsh plugin add / remove` 这条 CLI 路径，与命令行完全一致，`dsh.profile.bundles` 的同步由 CLI 负责，不存在第二套状态。装好之后，纯客户端插件刷新页面即可生效；组合较复杂的插件会明确提示需要重启。
+安装、卸载与更新走的都是 `dsh plugin add / remove` 这条 CLI 路径，与命令行完全一致，`dsh.profile.bundles` 的同步由 CLI 负责，不存在第二套状态。已安装列表可以一键检查更新：npm 安装的对照 registry 的 latest 版本号，github 安装的对照仓库 HEAD 提交，本地链接则如实标注、不做检查；发现新版后单插件就地更新，更新前还会核对方向——registry 的 latest 不高于已装版本时拒绝执行，绝不把更新变成降级。装好之后，纯客户端插件刷新页面即可生效；组合较复杂的插件会明确提示需要重启，在 DSH Desktop 里页面上就有「重启服务」按钮（独立 dsh 下则提示手动重启）。
 
 ## 安装
 
@@ -25,7 +25,7 @@ dsh plugin --profile web remove dsh-plugin-install
 
 ## 安全
 
-写操作设有三重防护：spec 采用字符白名单校验，拒绝参数注入与 shell 元字符（如首字符 `-`、分号、重定向符）；POST 请求要求同源；同一时刻仅允许一个安装或卸载操作运行。服务本身只绑定回环地址，上述措施构成纵深防御。
+写操作设有三重防护：spec 采用字符白名单校验，拒绝参数注入与 shell 元字符（如首字符 `-`、分号、重定向符），更新目标则只能取自已安装清单；POST 请求要求同源；同一时刻仅允许一个安装、卸载或更新操作运行。服务本身只绑定回环地址，上述措施构成纵深防御。
 
 ## 在 DSH Desktop 中
 
@@ -46,7 +46,7 @@ npm run build
 DSH_DESKTOP_PLUGIN_SMOKE=1 npm test
 ```
 
-它会创建临时 `DSH_HOME`，将本插件安装进 `web` profile，启动 `dsh web`，并对安装、卸载、取消等路由逐一探测。
+它会创建临时 `DSH_HOME`，将本插件安装进 `web` profile，启动 `dsh web`，并对安装、卸载、取消、更新检查等路由逐一探测。
 
 ## 许可
 
