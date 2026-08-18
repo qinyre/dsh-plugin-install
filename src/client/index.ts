@@ -39,9 +39,16 @@ interface InstallClientContext {
 /** Same-origin fetch of the installer host routes. */
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init)
-  const body = (await response.json()) as T & { error?: string }
-  if (!response.ok) throw new Error(body.error ?? `HTTP ${response.status}`)
-  return body
+  // Error bodies are normally JSON but must not have to be (a proxy can emit
+  // an HTML error page); parse leniently so the status still reaches the UI.
+  let body: (T & { error?: string }) | undefined
+  try {
+    body = (await response.json()) as T & { error?: string }
+  } catch {
+    body = undefined
+  }
+  if (!response.ok) throw new Error(body?.error ?? `HTTP ${response.status}`)
+  return body as T
 }
 
 export const name = 'dsh-plugin-install'

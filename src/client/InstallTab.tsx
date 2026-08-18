@@ -154,6 +154,13 @@ export function InstallTab(props: { t: Translate; injected: InstallTabInjected }
     return () => { current = false; clearInterval(timer) }
   }, [busy, injected])
 
+  // Transport-level failures (route crash, 409 race, offline) carry no
+  // outcome body — fold them into the same failed-outcome banner instead of
+  // vanishing as unhandled rejections.
+  const setFailedOutcome = (error: unknown): void => {
+    setOutcome({ ok: false, hot: false, error: error instanceof Error ? error.message : String(error), installed: [] })
+  }
+
   const doInstall = async (): Promise<void> => {
     const trimmed = spec.trim()
     if (trimmed === '') return
@@ -168,6 +175,8 @@ export function InstallTab(props: { t: Translate; injected: InstallTabInjected }
         setSpec('')
         void doCheckUpdates(false)
       }
+    } catch (error) {
+      setFailedOutcome(error)
     } finally {
       setBusy(false)
     }
@@ -182,6 +191,8 @@ export function InstallTab(props: { t: Translate; injected: InstallTabInjected }
       setOutcome(result)
       setInstalled(result.installed)
       if (result.ok) void doCheckUpdates(false)
+    } catch (error) {
+      setFailedOutcome(error)
     } finally {
       setBusy(false)
     }
@@ -201,6 +212,8 @@ export function InstallTab(props: { t: Translate; injected: InstallTabInjected }
         delete next[confirmName]
         return next
       })
+    } catch (error) {
+      setFailedOutcome(error)
     } finally {
       setBusy(false)
       setConfirmName(null)

@@ -95,7 +95,10 @@ export function mountInstallerRoutes(
           installing = true
           try {
             const outcome = await installPlugin(host, config.profile, config.profileDirPath, spec)
-            sendJson(response, outcome.ok || outcome.cancelled ? 200 : 502, outcome)
+            // A failed command is a valid result, not an HTTP error: the tab
+            // renders the ok:false banner from this body, and a non-2xx status
+            // makes the client's fetch helper discard the body entirely.
+            sendJson(response, 200, outcome)
           } finally {
             installing = false
           }
@@ -133,7 +136,8 @@ export function mountInstallerRoutes(
           installing = true
           try {
             const outcome = await uninstallPlugin(config.profile, config.profileDirPath, name)
-            sendJson(response, outcome.ok || outcome.cancelled ? 200 : 502, outcome)
+            // Outcome body, always 200 — see the install route.
+            sendJson(response, 200, outcome)
           } finally {
             installing = false
           }
@@ -213,7 +217,8 @@ export function mountInstallerRoutes(
           installing = true
           try {
             const outcome = await installPlugin(host, config.profile, config.profileDirPath, target)
-            sendJson(response, outcome.ok || outcome.cancelled ? 200 : 502, outcome)
+            // Outcome body, always 200 — see the install route.
+            sendJson(response, 200, outcome)
           } finally {
             installing = false
           }
