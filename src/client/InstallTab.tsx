@@ -41,6 +41,7 @@ export interface InstallOutcome {
   hot: boolean
   cancelled?: boolean
   error?: string
+  staleRegistry?: boolean
   installed: string[]
 }
 
@@ -79,6 +80,7 @@ const CSS = `
 .dpi-bannerBody{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px;font-size:13px;line-height:20px}
 .dpi-bannerHint{display:flex;align-items:center;gap:8px;flex-wrap:wrap;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px}
 .dpi-errorText{margin:0;overflow-wrap:anywhere;font-family:var(--ds-font-family-code);font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}
+.dpi-hintText{margin:0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary)}
 .dpi-listHead{display:flex;align-items:baseline;gap:7px;padding:0 2px;margin-top:2px}
 .dpi-listHead h3{margin:0;font-size:13px;line-height:20px;font-weight:600}
 .dpi-count{font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums}
@@ -276,6 +278,7 @@ export function InstallTab(props: { t: Translate; injected: InstallTabInjected }
               ? <span>{op === 'update' ? t('updateSuccess') : op === 'uninstall' ? t('uninstallSuccess') : t('success')} — {outcome.hot ? t('hotReady') : t('restartNeeded')}</span>
               : <span>{op === 'update' ? t('updateFailed') : op === 'uninstall' ? t('uninstallFailed') : t('failed')}</span>}
             {!outcome.ok && outcome.error !== undefined && <p className="dpi-errorText">{outcome.error}</p>}
+            {!outcome.ok && outcome.staleRegistry === true && <p className="dpi-hintText">{t('staleHint')}</p>}
             {outcome.ok && !outcome.hot && (
               <span className="dpi-bannerHint">
                 {injected.desktop

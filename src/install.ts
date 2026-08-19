@@ -17,10 +17,40 @@ export interface InstallOutcome {
   exitCode: number | null
   timedOut: boolean
   error?: string
+  /** True when the failure still smells like the post-publish propagation
+   * race even after the automatic retry — the UI adds a targeted hint. */
+  staleRegistry?: boolean
   stdout: string
   stderr: string
   installed: string[]
   live: string[]
+}
+
+/**
+ * Update clicked seconds after `npm publish` resolves against registry
+ * metadata that has not propagated yet and dies with ERR_PNPM_NO_VERSIONS —
+ * observable only in that window, and a delayed retry heals it.
+ */
+function smellsLikeStaleRegistry(stderr: string): boolean {
+  return stderr.includes('ERR_PNPM_NO_VERSIONS')
+}
+
+const retryDelayMs = (): number => Number(process.env.DSH_INSTALL_RETRY_MS) || 20_000
+
+const delay = (ms: number): Promise<void> => new Promise(resolve => { setTimeout(resolve, ms) })
+
+/** Run one add, retrying once after a pause when the failure is the
+ * post-publish propagation race. The retry is invisible except through the
+ * live progress line. */
+async function runAddWithRetry(profile: string, spec: string) {
+  let result = await runPlugin(profile, ['add', spec])
+  const failed = result.exitCode !== 0 && !result.timedOut && !result.cancelled
+  if (failed && smellsLikeStaleRegistry(result.stderr)) {
+    progress.lastLine = 'registry metadata not propagated yet — retrying once…'
+    await delay(retryDelayMs())
+    result = await runPlugin(profile, ['add', spec])
+  }
+  return result
 }
 
 /**
@@ -64,7 +94,7 @@ export async function installPlugin(
 ): Promise<InstallOutcome> {
   cleanHotDir(profileDirPath)
   const before = new Set(readInstalledBundles(profileDirPath))
-  const result = await runPlugin(profile, ['add', spec])
+  const result = await runAddWithRetry(profile, spec)
   const ok = result.exitCode === 0 && !result.timedOut && !result.cancelled
   if (ok) invalidateUpdates()
   let hot = false
@@ -76,6 +106,7 @@ export async function installPlugin(
     exitCode: result.exitCode,
     timedOut: result.timedOut,
     error: result.stderr.slice(-800) || undefined,
+    staleRegistry: (!ok && smellsLikeStaleRegistry(result.stderr)) || undefined,
     stdout: result.stdout.slice(-2000),
     stderr: result.stderr.slice(-2000),
     installed: readInstalledBundles(profileDirPath),
