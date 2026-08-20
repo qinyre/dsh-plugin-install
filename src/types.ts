@@ -31,6 +31,21 @@ export const SPEC_RE = /^[A-Za-z0-9@:./_#+~^=*-]+$/
 /** Upper bound of a single spec, and of the whole body. */
 export const MAX_SPEC_LENGTH = 200
 
+/** One installed plugin's Settings card row (metadata + mount state). */
+export interface InstalledPlugin {
+  name: string
+  version: string | null
+  description: string | null
+  /** Repository as a browsable https URL, when derivable; null otherwise. */
+  repository: string | null
+  /** False while the running composition holds the plugin paused. */
+  mounted: boolean
+  /** False when the bundle patch resists row-level disabling. */
+  toggleable: boolean
+  /** True for the installer itself — paused only by uninstalling it. */
+  self: boolean
+}
+
 /** The webServer service subset this plugin consumes (structural). */
 export interface WebServerService {
   register(route: {

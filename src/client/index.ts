@@ -1,15 +1,17 @@
 /** dsh-plugin-install client entry: contributes the “Install” tab into the
- * Web Settings → Plugins section. The tab runs on the same web server as the
- * host routes (/dsh-plugin-install/*), so it calls them with plain fetch. */
+ * Web Settings → Plugins section, plus the update-count badge on the
+ * section's nav row. The tab runs on the same web server as the host routes
+ * (/dsh-plugin-install/*), so it calls them with plain fetch. */
 
 import { createElement as h } from 'react'
-import { InstallTab, type InstallOutcome, type InstallStatus, type UpdatesResponse } from './InstallTab.tsx'
+import { InstallTab, type InstallOutcome, type InstallStatus, type MountResponse, type UpdatesResponse } from './InstallTab.tsx'
+import { installNavBadge, setNavBadgeCount } from './navBadge.ts'
 import { zh, en } from './locales.ts'
 
 /** Locale dictionary namespace owned by this plugin. */
 export const NS = 'settings.pluginInstall'
 
-export type { InstallTabInjected, InstallStatus, InstallOutcome, UpdatesResponse } from './InstallTab.tsx'
+export type { InstallTabInjected, InstallStatus, InstallOutcome, MountResponse, PluginRow, UpdatesResponse } from './InstallTab.tsx'
 
 /** The `t` function bound by the locale service. */
 export interface Translate {
@@ -51,6 +53,15 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T
 }
 
+/** Pull the update listing (TTL-cached server-side) into the nav badge. */
+async function refreshBadge(): Promise<void> {
+  try {
+    const response = await fetchJson<UpdatesResponse>('/dsh-plugin-install/updates')
+    const pending = Object.values(response.updates).filter(status => status.updateAvailable).length
+    setNavBadgeCount(pending)
+  } catch { /* offline: the last count stands */ }
+}
+
 export const name = 'dsh-plugin-install'
 export const inject = ['slots', 'locale']
 
@@ -58,6 +69,15 @@ export function apply(ctx: InstallClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-plugin-install: dictionaries')
 
   const t = ctx.locale.bind(NS)
+
+  // Badge layer + its own cadence: one fill at load, then every 10 minutes.
+  // The server TTL (30 min) bounds the real network traffic underneath.
+  ctx.effect(() => installNavBadge(), 'dsh-plugin-install: nav badge')
+  ctx.effect(() => {
+    void refreshBadge()
+    const timer = setInterval(() => { void refreshBadge() }, 10 * 60_000)
+    return () => clearInterval(timer)
+  }, 'dsh-plugin-install: badge refresh')
 
   ctx.slots.inject('settings.plugins.tab', () => {
     const injected = {
@@ -82,17 +102,34 @@ export function apply(ctx: InstallClientContext): void {
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ name }),
         }),
+      mount: async (name: string, enabled: boolean): Promise<MountResponse> =>
+        fetchJson<MountResponse>('/dsh-plugin-install/mount', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ name, enabled }),
+        }),
       cancel: async (): Promise<void> => {
         await fetchJson('/dsh-plugin-install/cancel', { method: 'POST' })
       },
       restart: (): void => {
-        // Desktop: hand the restart to the shell (supervised sidecar).
-        // Standalone: tell the user to restart dsh themselves.
-        if (window.dshDesktop?.restartSidecar !== undefined) {
-          window.dshDesktop.restartSidecar()
-        } else {
-          void fetch('/dsh-plugin-install/restart', { method: 'POST' }).catch(() => undefined)
+        // Desktop only: hand the restart to the shell (supervised sidecar).
+        window.dshDesktop?.restartSidecar?.()
+      },
+      restartWeb: async (): Promise<void> => {
+        // Standalone: the host relaunches itself through a detached relay;
+        // poll until the new process answers, then reload into it.
+        await fetchJson('/dsh-plugin-install/restart', { method: 'POST' })
+        const deadline = Date.now() + 45_000
+        for (;;) {
+          await new Promise(resolve => { setTimeout(resolve, 1000) })
+          try {
+            await fetchJson<InstallStatus>('/dsh-plugin-install/status')
+            break
+          } catch {
+            if (Date.now() > deadline) throw new Error('restart did not come back within 45s')
+          }
         }
+        window.location.reload()
       },
       desktop: window.dshDesktop !== undefined,
     }

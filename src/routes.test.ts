@@ -5,7 +5,7 @@
  * fetch helper threw the body away, and the tab showed nothing at all.
  */
 
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -16,8 +16,15 @@ vi.mock('./install.ts', async (importOriginal) => {
   return { ...actual, installPlugin: vi.fn(), uninstallPlugin: vi.fn() }
 })
 
+vi.mock('./restart.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./restart.ts')>()
+  return { ...actual, scheduleSelfRestart: vi.fn(), canSelfRestart: () => true }
+})
+
 import { mountInstallerRoutes } from './routes.ts'
 import { installPlugin, uninstallPlugin } from './install.ts'
+import { scheduleSelfRestart } from './restart.ts'
+import { progress } from './cli.ts'
 import type { InstallOutcome } from './install.ts'
 import type { InstallerHost, WebServerService } from './types.ts'
 
@@ -105,5 +112,66 @@ describe('installer route contract', () => {
     expect(status).toBe(200)
     expect(body.ok).toBe(false)
     expect(body.error).toContain('ERR_PNPM_NO_MATCHING_VERSION')
+  })
+})
+
+describe('mount route（挂载/停用）', () => {
+  function seedBundle(name: string, patch: string): void {
+    const dir = join(root, 'node_modules', name)
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({
+      name,
+      version: '1.0.0',
+      dsh: { bundle: { patch: './cordis.patch.yml' } },
+    }), 'utf8')
+    writeFileSync(join(dir, 'cordis.patch.yml'), patch, 'utf8')
+    writeFileSync(join(root, 'package.json'), JSON.stringify({
+      dependencies: { [name]: '^1.0.0' },
+      dsh: { profile: { bundles: [name, 'dsh-plugin-install'] } },
+    }))
+  }
+
+  it('pauses a toggleable plugin by writing the profile patch layer', async () => {
+    seedBundle('demo-plugin', '- insert:\n    - id: demo-plugin\n      name: demo-plugin\n')
+    const { status, body } = await post('/dsh-plugin-install/mount', { name: 'demo-plugin', enabled: false }, mountRoutes())
+    expect(status).toBe(200)
+    expect(body).toMatchObject({ ok: true, name: 'demo-plugin', mounted: false })
+    const row = body.plugins.find((row: { name: string }) => row.name === 'demo-plugin')
+    expect(row).toMatchObject({ mounted: false, toggleable: true, repository: null })
+    expect(readFileSync(join(root, 'cordis.patch.yml'), 'utf8')).toContain('- id: demo-plugin')
+  })
+
+  it('refuses to pause the installer itself', async () => {
+    const { status, body } = await post('/dsh-plugin-install/mount', { name: 'dsh-plugin-install', enabled: false }, mountRoutes())
+    expect(status).toBe(400)
+    expect(body.error).toContain('installer itself')
+  })
+
+  it('refuses unknown plugins and non-toggleable patches', async () => {
+    const unknown = await post('/dsh-plugin-install/mount', { name: 'ghost', enabled: false }, mountRoutes())
+    expect(unknown.status).toBe(400)
+    seedBundle('grouped-plugin', '- insert:\n  - id: g\n    group: true\n')
+    const grouped = await post('/dsh-plugin-install/mount', { name: 'grouped-plugin', enabled: false }, mountRoutes())
+    expect(grouped.status).toBe(400)
+    expect(grouped.body.error).toContain('row-wise')
+  })
+})
+
+describe('restart route（独立环境自重启）', () => {
+  it('answers ok standalone and hands off after the response', async () => {
+    delete process.env.DSH_DESKTOP
+    progress.active = false
+    const { status, body } = await post('/dsh-plugin-install/restart', {}, mountRoutes())
+    expect(status).toBe(200)
+    expect(body).toMatchObject({ ok: true, restarting: true })
+    expect(scheduleSelfRestart).toHaveBeenCalledTimes(1)
+  })
+
+  it('still refuses while a plugin operation is running', async () => {
+    delete process.env.DSH_DESKTOP
+    progress.active = true
+    const { status } = await post('/dsh-plugin-install/restart', {}, mountRoutes())
+    expect(status).toBe(409)
+    progress.active = false
   })
 })

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { readInstalledBundles, readInstalledSpecs, readInstalledVersion, readLockCommits, argvProfile, profileDir, isLocalLink } from './profile.ts'
+import { readInstalledBundles, readInstalledSpecs, readInstalledVersion, readLockCommits, readPluginMeta, repositoryUrl, argvProfile, profileDir, isLocalLink } from './profile.ts'
 
 describe('readInstalledBundles（可装清单 = bundles − 基线）', () => {
   it('filters the in-box baseline and returns user bundles', () => {
@@ -104,6 +104,52 @@ describe('readLockCommits', () => {
 
   it('returns an empty map without a lockfile', () => {
     expect(readLockCommits(mkFakeProfile('{}')).size).toBe(0)
+  })
+})
+
+describe('repositoryUrl（仓库地址归一化为可点击 https）', () => {
+  it('unfolds shorthand, git+ prefixes, and .git suffixes', () => {
+    expect(repositoryUrl('github:user/repo')).toBe('https://github.com/user/repo')
+    expect(repositoryUrl('user/repo')).toBe('https://github.com/user/repo')
+    expect(repositoryUrl('git+https://github.com/user/repo.git')).toBe('https://github.com/user/repo')
+    expect(repositoryUrl({ type: 'git', url: 'git+https://github.com/user/repo.git' })).toBe('https://github.com/user/repo')
+    expect(repositoryUrl('https://gitlab.com/u/r')).toBe('https://gitlab.com/u/r')
+  })
+
+  it('returns null for non-web fields', () => {
+    expect(repositoryUrl(undefined)).toBeNull()
+    expect(repositoryUrl('')).toBeNull()
+    expect(repositoryUrl({ type: 'git', url: 'ssh://git@host/r' })).toBeNull()
+    expect(repositoryUrl('not a url at all')).toBeNull()
+  })
+})
+
+describe('readPluginMeta（卡片元数据：版本/描述/源码）', () => {
+  it('reads the manifest and falls back to the github spec for the repo', () => {
+    const dir = mkFakeProfile('{}')
+    mkdirSync(join(dir, 'node_modules', 'my-plugin'), { recursive: true })
+    writeFileSync(join(dir, 'node_modules', 'my-plugin', 'package.json'), JSON.stringify({
+      name: 'my-plugin',
+      version: '2.1.0',
+      description: '  A handy plugin. ',
+      repository: 'github:me/my-plugin',
+    }), 'utf8')
+    expect(readPluginMeta(dir, 'my-plugin', 'github:me/my-plugin#v2')).toEqual({
+      name: 'my-plugin',
+      version: '2.1.0',
+      description: 'A handy plugin.',
+      repository: 'https://github.com/me/my-plugin',
+    })
+  })
+
+  it('derives the repo from a github install spec when the manifest has none', () => {
+    const dir = mkFakeProfile('{}')
+    mkdirSync(join(dir, 'node_modules', 'gh-plugin'), { recursive: true })
+    writeFileSync(join(dir, 'node_modules', 'gh-plugin', 'package.json'), '{"name":"gh-plugin","version":"0.0.1"}', 'utf8')
+    expect(readPluginMeta(dir, 'gh-plugin', 'github:someone/gh-plugin').repository)
+      .toBe('https://github.com/someone/gh-plugin')
+    expect(readPluginMeta(mkFakeProfile('{}'), 'ghost').repository).toBeNull()
+    expect(readPluginMeta(mkFakeProfile('{}'), 'ghost').version).toBeNull()
   })
 })
 

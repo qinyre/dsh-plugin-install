@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { runPlugin, progress, cancelActive, inDesktop } from './cli.ts'
 import { readInstalledBundles, readInstalledVersion } from './profile.ts'
 import { parseSimplePatch, hotMount, hotUnmount, listHotMounts, cleanHotDir } from './hot.ts'
+import { readMountRows, stripPluginRows } from './mounts.ts'
 import { invalidateUpdates } from './updates.ts'
 import type { InstallerHost } from './types.ts'
 
@@ -185,11 +186,17 @@ export async function uninstallPlugin(
   profileDirPath: string,
   name: string,
 ): Promise<InstallOutcome> {
+  // The patch file disappears with the package, so read the rows before the
+  // remove; leftover disable rows would ambush a future reinstall of the name.
+  const mountRows = readMountRows(profileDirPath, name)
   // Same cooldown bypass as adds: pnpm 11 policy-checks the whole lockfile
   // on removes too, so an in-window entry anywhere blocks the uninstall.
   const { result } = await runOpWithBypass(profile, ['remove', name])
   const ok = result.exitCode === 0 && !result.timedOut && !result.cancelled
-  if (ok) invalidateUpdates()
+  if (ok) {
+    invalidateUpdates()
+    stripPluginRows(profileDirPath, mountRows)
+  }
   let unmounted = false
   if (ok) unmounted = await hotUnmount(name)
   return {

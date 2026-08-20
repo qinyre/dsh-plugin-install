@@ -114,6 +114,13 @@ describe.skipIf(process.env.DSH_DESKTOP_PLUGIN_SMOKE !== '1' || !guard || !nodeO
     if (install.code !== 0) console.log('[smoke] FULL dsh output:\n' + install.out)
     expect(install.code, install.out).toBe(0)
 
+    // 1b. A second real bundle (atlas: zero runtime deps, has HTTP routes)
+    // installed BEFORE boot, so its entry lives in the root tree — the only
+    // shape a live mount-toggle can act on.
+    const atlasDir = join(pluginDir, '..', 'dsh-plugin-atlas')
+    const installAtlas = await dsh(['plugin', '--profile', 'web', 'add', `file:${atlasDir}`], env)
+    expect(installAtlas.code, installAtlas.out).toBe(0)
+
     // 2. The reconcile wrote dsh.profile.bundles with our package.
     const manifest = JSON.parse(readFileSync(join(smokeRoot, 'profiles', 'web', 'package.json'), 'utf8')) as {
       dsh?: { profile?: { bundles?: string[] } }
@@ -146,5 +153,74 @@ describe.skipIf(process.env.DSH_DESKTOP_PLUGIN_SMOKE !== '1' || !guard || !nodeO
     })
     expect(update.status).toBe(400)
     expect(await update.json()).toMatchObject({ error: expect.stringContaining('checkout') as unknown })
+
+    // 7. Card rows carry manifest metadata; the installer flags itself.
+    const cards = await (await fetch(`${origin}/dsh-plugin-install/status`)).json() as {
+      plugins?: Array<{ name: string; mounted: boolean; toggleable: boolean; self: boolean; repository: string | null; description: string | null }>
+      updatesAvailable?: number
+    }
+    const selfRow = cards.plugins?.find(row => row.name === 'dsh-plugin-install')
+    expect(selfRow).toMatchObject({ mounted: true, toggleable: false, self: true })
+    expect(selfRow?.repository).toBe('https://github.com/qinyre/dsh-plugin-install')
+    expect(selfRow?.description).toBeTruthy()
+    expect(typeof cards.updatesAvailable).toBe('number')
+    const atlasRow = cards.plugins?.find(row => row.name === 'dsh-plugin-atlas')
+    expect(atlasRow).toMatchObject({ mounted: true, toggleable: true, self: false })
+
+    // 8. The installer refuses to pause itself.
+    const selfPause = await fetch(`${origin}/dsh-plugin-install/mount`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: origin, host: `127.0.0.1:${port}` },
+      body: JSON.stringify({ name: 'dsh-plugin-install', enabled: false }),
+    })
+    expect(selfPause.status).toBe(400)
+
+    // 9. Live pause/resume: writing the disable row into the profile patch
+    // layer makes the watcher recompose — atlas's routes must drop and come
+    // back without any restart. The webServer answers ANY unmatched path
+    // with the SPA shell (200 text/html), so "mounted" means the route
+    // answers JSON, not merely 200.
+    const atlasMounted = async (): Promise<boolean> => {
+      const res = await fetch(`${origin}/dsh-plugin-atlas/status`)
+      return (res.headers.get('content-type') ?? '').includes('application/json')
+    }
+    const waitFor = async (want: boolean, label: string): Promise<void> => {
+      for (let i = 0; i < 40; i++) {
+        if (await atlasMounted() === want) return
+        await new Promise(resolve => { setTimeout(resolve, 500) })
+      }
+      throw new Error(`smoke: atlas never became ${label}`)
+    }
+    expect(await atlasMounted()).toBe(true)
+
+    const pause = await fetch(`${origin}/dsh-plugin-install/mount`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: origin, host: `127.0.0.1:${port}` },
+      body: JSON.stringify({ name: 'dsh-plugin-atlas', enabled: false }),
+    })
+    expect(pause.status).toBe(200)
+    expect(await pause.json()).toMatchObject({ ok: true, mounted: false })
+    expect(readFileSync(join(smokeRoot, 'profiles', 'web', 'cordis.patch.yml'), 'utf8')).toContain('- id: dsh-plugin-atlas')
+    await waitFor(false, 'unmounted')
+
+    const pausedCards = await (await fetch(`${origin}/dsh-plugin-install/status`)).json() as {
+      plugins?: Array<{ name: string; mounted: boolean }>
+    }
+    expect(pausedCards.plugins?.find(row => row.name === 'dsh-plugin-atlas')?.mounted).toBe(false)
+
+    const resume = await fetch(`${origin}/dsh-plugin-install/mount`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: origin, host: `127.0.0.1:${port}` },
+      body: JSON.stringify({ name: 'dsh-plugin-atlas', enabled: true }),
+    })
+    expect(resume.status).toBe(200)
+    await waitFor(true, 'mounted')
+    // The emptied layer must stay a parsable top-level array — the seeded
+    // header comments stay, the managed markers and rows go, an explicit
+    // `[]` root returns.
+    const emptied = readFileSync(join(smokeRoot, 'profiles', 'web', 'cordis.patch.yml'), 'utf8')
+    expect(emptied).toContain('[]')
+    expect(emptied).not.toContain('begin dsh-plugin-install mounts')
+    expect(emptied).not.toContain('- id:')
   })
 })

@@ -6,15 +6,36 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { readJsonBody, sameOrigin, sendJson } from './http.ts'
 import { installPlugin, uninstallPlugin, progress, cancelActive, inDesktop } from './install.ts'
-import { readInstalledBundles, readInstalledSpecs, readInstalledVersion, isLocalLink } from './profile.ts'
-import { checkUpdates, fetchNpmLatest, isUpgrade } from './updates.ts'
+import { readInstalledBundles, readInstalledSpecs, readInstalledVersion, readPluginMeta, isLocalLink } from './profile.ts'
+import { readDisabledIds, readMountRows, setPluginMounted } from './mounts.ts'
+import { checkUpdates, fetchNpmLatest, isUpgrade, cachedUpdateCount } from './updates.ts'
+import { canSelfRestart, scheduleSelfRestart } from './restart.ts'
 import { validateSpec } from './cli.ts'
-import type { InstallerHost } from './types.ts'
+import type { InstalledPlugin, InstallerHost } from './types.ts'
 
 /** Host-context builder for testability: real code wires host.webServer. */
 export interface RouteConfig {
   profile: string
   profileDirPath: string
+}
+
+/** The package name of this plugin — the one mount the UI must not pause. */
+const SELF_NAME = 'dsh-plugin-install'
+
+/** Card rows for every installed plugin: manifest metadata + mount state. */
+export function readPluginRows(profileDirPath: string): InstalledPlugin[] {
+  const specs = readInstalledSpecs(profileDirPath)
+  const disabled = readDisabledIds(profileDirPath)
+  return readInstalledBundles(profileDirPath).map((name) => {
+    const rows = readMountRows(profileDirPath, name)
+    const mounted = rows.ids.length === 0 || !rows.ids.every(id => disabled.has(id))
+    return {
+      ...readPluginMeta(profileDirPath, name, specs[name]),
+      mounted,
+      toggleable: rows.toggleable && name !== SELF_NAME,
+      self: name === SELF_NAME,
+    }
+  })
 }
 
 /**
@@ -46,6 +67,8 @@ export function mountInstallerRoutes(
           lastError: progress.lastError,
           cancelling: progress.cancelling,
           installed: readInstalledBundles(config.profileDirPath),
+          plugins: readPluginRows(config.profileDirPath),
+          updatesAvailable: cachedUpdateCount(config.profileDirPath),
         })
       },
     }),
@@ -62,6 +85,7 @@ export function mountInstallerRoutes(
         sendJson(response, 200, {
           profile: config.profile,
           installed: readInstalledBundles(config.profileDirPath),
+          plugins: readPluginRows(config.profileDirPath),
           desktop: inDesktop(),
         })
       },
@@ -236,6 +260,57 @@ export function mountInstallerRoutes(
 
     host.webServer.register({
       kind: 'exact',
+      path: '/dsh-plugin-install/mount',
+      handler: async (request: IncomingMessage, response: ServerResponse) => {
+        if (request.method !== 'POST') {
+          response.writeHead(405, { allow: 'POST' })
+          response.end()
+          return
+        }
+        if (!sameOrigin(request)) {
+          sendJson(response, 403, { error: 'untrusted origin' })
+          return
+        }
+        if (installing) {
+          sendJson(response, 409, { error: 'another install is running' })
+          return
+        }
+        try {
+          const body = (await readJsonBody(request)) as { name?: unknown; enabled?: unknown }
+          const name = typeof body.name === 'string' ? body.name : ''
+          const enabled = body.enabled === true
+          if (name === '' || !readInstalledBundles(config.profileDirPath).includes(name)) {
+            sendJson(response, 400, { error: 'plugin is not installed' })
+            return
+          }
+          if (name === SELF_NAME) {
+            sendJson(response, 400, { error: 'the installer itself cannot be paused — it owns this page' })
+            return
+          }
+          const rows = readMountRows(config.profileDirPath, name)
+          if (!rows.toggleable) {
+            sendJson(response, 400, { error: 'this plugin\'s bundle patch cannot be disabled row-wise' })
+            return
+          }
+          setPluginMounted(config.profileDirPath, rows, enabled)
+          // The profile layer's watcher recomposes the tree live; the rows
+          // also hold at the next boot, so no restart is implied either way.
+          sendJson(response, 200, {
+            ok: true,
+            name,
+            mounted: enabled,
+            plugins: readPluginRows(config.profileDirPath),
+            installed: readInstalledBundles(config.profileDirPath),
+          })
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          sendJson(response, 500, { error: message })
+        }
+      },
+    }),
+
+    host.webServer.register({
+      kind: 'exact',
       path: '/dsh-plugin-install/cancel',
       handler: async (request: IncomingMessage, response: ServerResponse) => {
         if (request.method !== 'POST') {
@@ -278,20 +353,22 @@ export function mountInstallerRoutes(
           sendJson(response, 409, { error: 'cannot restart while a plugin operation is running' })
           return
         }
-        // Ordinary DSH: this route is a no-op stub in v1 — actual self-restart
-        // is owned by the host deployment. We answer 501 so clients never
-        // believe a restart happened.
-        logStubRestart(request)
-        sendJson(response, 501, { error: 'self-restart is not implemented; restart dsh yourself' })
+        // Ordinary DSH: spawn a detached relay, hand it this process's exact
+        // argv, then shut down gracefully — the relay re-runs us once the
+        // port frees. The response flushes before any of that begins.
+        if (!canSelfRestart()) {
+          sendJson(response, 501, { error: 'this host has no re-runnable script entry; restart dsh yourself' })
+          return
+        }
+        sendJson(response, 200, { ok: true, restarting: true })
+        if (typeof response.on === 'function') {
+          response.on('finish', () => scheduleSelfRestart())
+        } else {
+          scheduleSelfRestart()
+        }
       },
     }),
   ]
 
   return () => { for (const dispose of disposers) dispose() }
-}
-
-/** Log the rejected restart attempt at INFO for debuggability. */
-function logStubRestart(_request: IncomingMessage): void {
-  // No logger dependency in v1; kept as a named hook so deployments can wire
-  // a real one without changing the route table.
 }

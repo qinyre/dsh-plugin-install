@@ -19,6 +19,9 @@ export interface UpdateStatus {
 
 const UPDATES_TTL_MS = 30 * 60 * 1000
 let updatesCache: { key: string; at: number; data: Record<string, UpdateStatus> } | null = null
+/** In-flight check per profile, so the badge poll and the scheduler never
+ * double-fetch a cold cache. */
+let updatesInflight: { key: string; promise: Promise<Record<string, UpdateStatus>> } | null = null
 
 const SEMVER = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/
 
@@ -76,6 +79,22 @@ export function invalidateUpdates(): void {
   updatesCache = null
 }
 
+/**
+ * The cached listing only — never touches the network. The scheduled
+ * background check keeps this warm; /status uses it to report an update
+ * count without paying a registry round-trip on every poll.
+ */
+export function cachedUpdates(profileDirPath: string): Record<string, UpdateStatus> | null {
+  return updatesCache?.key === profileDirPath ? updatesCache.data : null
+}
+
+/** Count of plugins with an available update, from the cache; 0 when cold. */
+export function cachedUpdateCount(profileDirPath: string): number {
+  const data = cachedUpdates(profileDirPath)
+  if (data === null) return 0
+  return Object.values(data).filter(status => status.updateAvailable).length
+}
+
 async function fetchJson(url: string): Promise<unknown> {
   const res = await fetch(url, {
     headers: { accept: 'application/json', 'user-agent': 'dsh-plugin-install' },
@@ -119,6 +138,17 @@ export async function checkUpdates(profileDirPath: string, force = false): Promi
   if (!force && updatesCache?.key === profileDirPath && Date.now() - updatesCache.at < UPDATES_TTL_MS) {
     return updatesCache.data
   }
+  if (!force && updatesInflight?.key === profileDirPath) return updatesInflight.promise
+  const promise = runUpdateCheck(profileDirPath)
+  updatesInflight = { key: profileDirPath, promise }
+  try {
+    return await promise
+  } finally {
+    if (updatesInflight?.promise === promise) updatesInflight = null
+  }
+}
+
+async function runUpdateCheck(profileDirPath: string): Promise<Record<string, UpdateStatus>> {
   const specs = readInstalledSpecs(profileDirPath)
   const lockCommits = readLockCommits(profileDirPath)
   const result: Record<string, UpdateStatus> = {}

@@ -11,10 +11,14 @@ export function argvProfile(argv: readonly string[] = process.argv): string | un
   return undefined
 }
 
+/** The dsh home directory (default `~/.dsh`). */
+export function dshHome(home = process.env.DSH_HOME): string {
+  return home ?? join(homedir(), '.dsh')
+}
+
 /** Directory of a profile under DSH_HOME (default `~/.dsh`). */
-export function profileDir(profile: string, dshHome: string | undefined = process.env.DSH_HOME): string {
-  const home = dshHome ?? join(homedir(), '.dsh')
-  return join(home, 'profiles', profile)
+export function profileDir(profile: string, home: string | undefined = process.env.DSH_HOME): string {
+  return join(dshHome(home), 'profiles', profile)
 }
 
 /** The in-box bundles every profile template ships; never shown as user-installed. */
@@ -71,6 +75,60 @@ export function readInstalledVersion(profileDirPath: string, name: string): stri
   } catch {
     return null
   }
+}
+
+/** Presentation metadata for one installed plugin's card. */
+export interface PluginMeta {
+  name: string
+  version: string | null
+  description: string | null
+  /** Repository as a browsable https URL, when derivable; null otherwise. */
+  repository: string | null
+}
+
+/**
+ * Normalize a package.json `repository` field (string shorthand or object
+ * with a url) into a browsable https URL. Returns null for anything that is
+ * not clearly a web-facing code host — the UI then hides the 源码 tag.
+ */
+export function repositoryUrl(repository: unknown): string | null {
+  const raw = typeof repository === 'string'
+    ? repository
+    : repository !== null && typeof repository === 'object' && typeof (repository as { url?: unknown }).url === 'string'
+      ? (repository as { url: string }).url
+      : null
+  if (raw === null) return null
+  const github = /^(?:github:)?([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+?)(?:#.*)?$/.exec(raw.trim())
+  if (github !== null && (raw.trim().startsWith('github:') || !/^[a-z]+:\/\//.test(raw.trim()))) {
+    return `https://github.com/${github[1]}`
+  }
+  try {
+    const url = new URL(raw.trim().replace(/^git\+/, '').replace(/\.git$/, ''))
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') return null
+    return url.toString().replace(/\/$/, '')
+  } catch {
+    return null
+  }
+}
+
+/** Read one installed plugin's card metadata straight from its manifest. */
+export function readPluginMeta(profileDirPath: string, name: string, spec?: string): PluginMeta {
+  const meta: PluginMeta = { name, version: null, description: null, repository: null }
+  try {
+    const manifest = JSON.parse(
+      readFileSync(join(profileDirPath, 'node_modules', name, 'package.json'), 'utf8'),
+    ) as { version?: string; description?: string; repository?: unknown }
+    if (typeof manifest.version === 'string') meta.version = manifest.version
+    if (typeof manifest.description === 'string' && manifest.description.trim() !== '') {
+      meta.description = manifest.description.trim()
+    }
+    meta.repository = repositoryUrl(manifest.repository)
+  } catch { /* missing manifest: version stays null, fields stay hidden */ }
+  if (meta.repository === null && spec !== undefined && spec.startsWith('github:')) {
+    const repo = /^github:([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+?)(?:#.*)?$/.exec(spec)
+    if (repo !== null) meta.repository = `https://github.com/${repo[1]}`
+  }
+  return meta
 }
 
 /** Pinned commit per `owner/repo` from the profile lockfile's codeload tarball URLs. */
