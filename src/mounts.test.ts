@@ -9,6 +9,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
+import { parse } from 'yaml'
 import {
   collectInsertIds,
   readDisabledIds,
@@ -102,7 +103,7 @@ describe('scanDisabledIds / readDisabledIds（跨两层读禁用行）', () => {
   })
 })
 
-describe('managed block（marker 手术不动用户行）', () => {
+describe('managed rows（AST 重写，任意风格都能合并）', () => {
   it('creates the file when absent and leaves a valid empty root when cleared', () => {
     const file = join(root, 'fresh', 'cordis.patch.yml')
     mkdirSync(join(root, 'fresh'), { recursive: true })
@@ -116,29 +117,80 @@ describe('managed block（marker 手术不动用户行）', () => {
     expect(readFileSync(file, 'utf8')).toBe('[]\n')
   })
 
-  it('keeps a comments-only layer parsable when the block empties', () => {
+  it('keeps a comments-only layer parsable when the rows empty', () => {
     const file = join(root, 'seeded', 'cordis.patch.yml')
     mkdirSync(join(root, 'seeded'), { recursive: true })
     writeFileSync(file, '# Your patch layer\n# more docs\n[]\n', 'utf8')
     writeManagedBlock(file, ['demo-plugin'])
-    const withBlock = readFileSync(file, 'utf8')
-    expect(withBlock.startsWith('# Your patch layer\n# more docs\n')).toBe(true)
-    expect(withBlock).toContain('- id: demo-plugin')
+    const withRows = readFileSync(file, 'utf8')
+    expect(withRows.startsWith('# Your patch layer\n# more docs\n')).toBe(true)
+    expect(withRows).toContain('- id: demo-plugin')
     writeManagedBlock(file, [])
-    expect(readFileSync(file, 'utf8')).toBe('# Your patch layer\n# more docs\n[]\n')
+    const emptied = readFileSync(file, 'utf8')
+    expect(emptied.startsWith('# Your patch layer\n# more docs\n')).toBe(true)
+    expect(emptied.trimEnd().endsWith('[]')).toBe(true)
   })
 
-  it('preserves user rows byte-for-byte outside the markers', () => {
+  it('preserves user rows of either style and stays parsable', () => {
     const file = join(root, 'user', 'cordis.patch.yml')
     mkdirSync(join(root, 'user'), { recursive: true })
     writeFileSync(file, '# my own layer\n- id: mine\n  config: {x: 1}\n', 'utf8')
     writeManagedBlock(file, ['demo-plugin'])
     const text = readFileSync(file, 'utf8')
-    expect(text.startsWith('# my own layer\n- id: mine\n  config: {x: 1}\n')).toBe(true)
-    expect(text).toContain('begin dsh-plugin-install mounts')
-    expect(text).toContain('- id: demo-plugin')
+    expect(text).toContain('dsh-plugin-install mount')
+    expect(parse(text)).toEqual([
+      { id: 'mine', config: { x: 1 } },
+      { id: 'demo-plugin', disabled: true },
+    ])
     writeManagedBlock(file, [])
-    expect(readFileSync(file, 'utf8')).toBe('# my own layer\n- id: mine\n  config: {x: 1}\n')
+    expect(parse(readFileSync(file, 'utf8'))).toEqual([{ id: 'mine', config: { x: 1 } }])
+  })
+
+  it('rewrites a flow-style layer into valid block style (dsh writes MCP rows this way)', () => {
+    const file = join(root, 'flow', 'cordis.patch.yml')
+    mkdirSync(join(root, 'flow'), { recursive: true })
+    writeFileSync(
+      file,
+      '[ { id: mcp-demo, name: "@deepseek-ai/dsh-mcp-client", config: { serverName: demo, command: cmd, args: [ /c, npx ] } } ]\n',
+      'utf8',
+    )
+    writeManagedBlock(file, ['web-ui-demo'])
+    expect(parse(readFileSync(file, 'utf8'))).toEqual([
+      { id: 'mcp-demo', name: '@deepseek-ai/dsh-mcp-client', config: { serverName: 'demo', command: 'cmd', args: ['/c', 'npx'] } },
+      { id: 'web-ui-demo', disabled: true },
+    ])
+    writeManagedBlock(file, [])
+    expect(parse(readFileSync(file, 'utf8'))).toEqual([
+      { id: 'mcp-demo', name: '@deepseek-ai/dsh-mcp-client', config: { serverName: 'demo', command: 'cmd', args: ['/c', 'npx'] } },
+    ])
+  })
+
+  it('rescues the unparseable 0.3.0 wreck and keeps its paused state', () => {
+    const file = join(root, 'cordis.patch.yml')
+    rmSync(file, { force: true })
+    // Exactly what 0.3.0 wrote over a flow-style MCP layer: block rows
+    // appended after a flow-style root — unparseable, and a boot brick.
+    writeFileSync(file, [
+      '# Your patch layer for this dsh profile',
+      '[ { id: mcp-demo, name: "@deepseek-ai/dsh-mcp-client", config: { serverName: demo } } ]',
+      '# begin dsh-plugin-install mounts (managed)',
+      '- id: web-ui-demo',
+      '  disabled: true',
+      '# end dsh-plugin-install mounts',
+    ].join('\n') + '\n', 'utf8')
+    expect(() => parse(readFileSync(file, 'utf8'))).toThrow()
+    // An unrelated toggle must repair the file and keep the paused row.
+    setPluginMounted(root, { ids: ['other-plugin'], toggleable: true }, false)
+    const ids = [...readDisabledIds(root, home)].sort()
+    expect(ids).toEqual(['other-plugin', 'web-ui-demo'])
+    expect(parse(readFileSync(file, 'utf8'))).toEqual([
+      { id: 'mcp-demo', name: '@deepseek-ai/dsh-mcp-client', config: { serverName: 'demo' } },
+      { id: 'other-plugin', disabled: true },
+      { id: 'web-ui-demo', disabled: true },
+    ])
+    // Resuming the legacy-paused plugin clears just its row.
+    setPluginMounted(root, { ids: ['web-ui-demo'], toggleable: true }, true)
+    expect([...readDisabledIds(root, home)]).toEqual(['other-plugin'])
   })
 })
 

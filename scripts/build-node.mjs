@@ -20,6 +20,12 @@ await build({
   target: 'node22',
   sourcemap: true,
   external: ['@deepseek-ai/cordis'],
+  // Bundled CommonJS dependencies (yaml) hold dynamic `require()` calls of
+  // node builtins; in an ESM output esbuild's shim throws on those unless a
+  // real `require` exists in module scope.
+  banner: {
+    js: `import { createRequire as __createRequire } from 'node:module'\nconst require = __createRequire(import.meta.url)`,
+  },
   define: {
     'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV ?? 'production'),
   },
