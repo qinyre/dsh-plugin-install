@@ -47,13 +47,15 @@ const delay = (ms: number): Promise<void> => new Promise(resolve => { setTimeout
 
 /**
  * pnpm ≥10.16 gates freshly published versions behind the minimumReleaseAge
- * cooldown (on by default in pnpm 11): a bare name or `@latest` then resolves
- * SILENTLY to the newest version outside the window, so an update clicked
- * within a day of a publish reinstalls the old version and still reports
- * success. The Install tab acts on an explicit user decision for one named
- * package, so each add disables the cooldown for itself. pnpm builds without
- * the setting reject the flag outright — that failure is detected and the add
- * retried plain.
+ * cooldown (on by default in pnpm 11), and it enforces the policy against the
+ * WHOLE lockfile on EVERY profile operation: a lockfile holding in-window
+ * entries — e.g. the transitive dependencies of an explicitly pinned install,
+ * which pnpm only excludes by the pinned name — fails add AND remove alike
+ * with ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION, while a bare name or `@latest`
+ * resolves SILENTLY to the newest version outside the window. The Install tab
+ * acts on explicit user decisions for named packages, so both verbs disable
+ * the cooldown per command. pnpm builds without the setting reject the flag
+ * outright — that failure is detected and the command re-run plain.
  */
 const NO_COOLDOWN = '--config.minimum-release-age=0'
 
@@ -61,23 +63,48 @@ function rejectsCooldownFlag(stderr: string): boolean {
   return /unknown option/i.test(stderr) && /minimum-release-age/i.test(stderr)
 }
 
+/** Run one profile operation with the cooldown bypass (falling back to a
+ * plain invocation on pnpm builds that reject the flag). Returns the bypass
+ * state so any retry repeats the command shape that this pnpm accepts. */
+async function runOpWithBypass(profile: string, args: string[]) {
+  const flagged = [...args.slice(0, -1), NO_COOLDOWN, args[args.length - 1]]
+  let result = await runPlugin(profile, flagged)
+  let bypass = true
+  if (rejectsCooldownFlag(result.stderr)) {
+    bypass = false
+    result = await runPlugin(profile, args)
+  }
+  return { result, bypass }
+}
+
 /** Run one add, retrying once after a pause when the failure is the
  * post-publish propagation race. The retry is invisible except through the
  * live progress line. */
 async function runAddWithRetry(profile: string, spec: string) {
-  let cooldownFlag = true
-  let result = await runPlugin(profile, ['add', NO_COOLDOWN, spec])
-  if (rejectsCooldownFlag(result.stderr)) {
-    cooldownFlag = false
-    result = await runPlugin(profile, ['add', spec])
-  }
+  const { result: first, bypass } = await runOpWithBypass(profile, ['add', spec])
+  let result = first
   const failed = result.exitCode !== 0 && !result.timedOut && !result.cancelled
   if (failed && smellsLikeStaleRegistry(result.stderr)) {
     progress.lastLine = 'registry metadata not propagated yet — retrying once…'
     await delay(retryDelayMs())
-    result = await runPlugin(profile, cooldownFlag ? ['add', NO_COOLDOWN, spec] : ['add', spec])
+    result = await runPlugin(profile, bypass ? ['add', NO_COOLDOWN, spec] : ['add', spec])
   }
   return result
+}
+
+/**
+ * The forwarder's trailing "dsh: pnpm failed…" summary is the one line its
+ * stderr may hold while pnpm itself prints the real diagnostics to STDOUT
+ * (the release-policy violation does exactly that) — prefer stderr minus the
+ * summary, fall back to stdout's tail so the banner names the actual error.
+ */
+function commandErrorText(result: { stderr: string; stdout: string }): string | undefined {
+  const meaningful = result.stderr
+    .split('\n')
+    .filter(line => line.trim() !== '' && !/^dsh: /.test(line))
+    .join('\n')
+  const text = meaningful !== '' ? meaningful : result.stdout.trim()
+  return text.slice(-800) || undefined
 }
 
 /**
@@ -141,7 +168,7 @@ export async function installPlugin(
     cancelled: result.cancelled || undefined,
     exitCode: result.exitCode,
     timedOut: result.timedOut,
-    error: result.stderr.slice(-800) || undefined,
+    error: commandErrorText(result),
     staleRegistry: (!ok && smellsLikeStaleRegistry(result.stderr)) || undefined,
     resolvedVersion: target === undefined ? undefined : readInstalledVersion(profileDirPath, target.name),
     expectedVersion: target?.expectedVersion,
@@ -158,7 +185,9 @@ export async function uninstallPlugin(
   profileDirPath: string,
   name: string,
 ): Promise<InstallOutcome> {
-  const result = await runPlugin(profile, ['remove', name])
+  // Same cooldown bypass as adds: pnpm 11 policy-checks the whole lockfile
+  // on removes too, so an in-window entry anywhere blocks the uninstall.
+  const { result } = await runOpWithBypass(profile, ['remove', name])
   const ok = result.exitCode === 0 && !result.timedOut && !result.cancelled
   if (ok) invalidateUpdates()
   let unmounted = false
@@ -169,7 +198,7 @@ export async function uninstallPlugin(
     cancelled: result.cancelled || undefined,
     exitCode: result.exitCode,
     timedOut: result.timedOut,
-    error: result.stderr.slice(-800) || undefined,
+    error: commandErrorText(result),
     stdout: result.stdout.slice(-2000),
     stderr: result.stderr.slice(-2000),
     installed: readInstalledBundles(profileDirPath),

@@ -14,7 +14,7 @@ vi.mock('./cli.ts', async (importOriginal) => {
   return { ...actual, runPlugin: vi.fn() }
 })
 
-import { installPlugin } from './install.ts'
+import { installPlugin, uninstallPlugin } from './install.ts'
 import { runPlugin } from './cli.ts'
 import type { InstallResult } from './types.ts'
 
@@ -130,5 +130,43 @@ describe('installPlugin cooldown bypass (pnpm minimumReleaseAge)', () => {
     const outcome = await installPlugin(host, 'web', root, 'dsh-plugin-atlas')
     expect(outcome.resolvedVersion).toBeUndefined()
     expect(outcome.expectedVersion).toBeUndefined()
+  })
+})
+
+describe('uninstall cooldown bypass (lockfile policy check)', () => {
+  // pnpm 11 policy-checks the WHOLE lockfile on removes: any in-window entry
+  // (transitive deps of a pinned install) blocks the uninstall wholesale.
+  it('removes with the cooldown disabled', async () => {
+    vi.mocked(runPlugin).mockReset().mockResolvedValueOnce(okRun)
+    await uninstallPlugin('web', root, 'dsh-plugin-atlas')
+    expect(runPlugin).toHaveBeenCalledWith('web', ['remove', '--config.minimum-release-age=0', 'dsh-plugin-atlas'])
+  })
+
+  it('falls back to a plain remove when pnpm rejects the flag', async () => {
+    vi.mocked(runPlugin).mockReset()
+      .mockResolvedValueOnce({ ...staleFail, stderr: "[ERROR] Unknown option: 'config.minimum-release-age'" })
+      .mockResolvedValueOnce(okRun)
+    const outcome = await uninstallPlugin('web', root, 'dsh-plugin-atlas')
+    expect(runPlugin).toHaveBeenCalledTimes(2)
+    expect(runPlugin).toHaveBeenLastCalledWith('web', ['remove', 'dsh-plugin-atlas'])
+    expect(outcome.ok).toBe(true)
+  })
+})
+
+describe('failure diagnostics surfacing', () => {
+  it('names pnpm\'s stdout error when stderr holds only the forwarder summary', async () => {
+    // The release-policy violation prints its ERR_PNPM block to STDOUT; the
+    // forwarder's stderr carries nothing but the final "dsh: pnpm failed" line.
+    vi.mocked(runPlugin).mockReset().mockResolvedValueOnce({
+      exitCode: 1,
+      timedOut: false,
+      stdout: '✗ Lockfile failed supply-chain policy check\n[ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION] 24 lockfile entries failed verification\n',
+      stderr: 'dsh: pnpm failed in profile directory C:\\users\\web\n',
+      cancelled: false,
+    })
+    const outcome = await installPlugin(host, 'web', root, 'dsh-plugin-atlas')
+    expect(outcome.ok).toBe(false)
+    expect(outcome.error).toContain('ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION')
+    expect(outcome.error).not.toContain('dsh: pnpm failed')
   })
 })
