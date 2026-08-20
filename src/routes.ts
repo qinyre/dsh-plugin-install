@@ -204,10 +204,10 @@ export function mountInstallerRoutes(
           // this update into a downgrade that also rewrites the pin. Detection
           // already hides the button; this guards the route itself. Unreadable
           // versions fall through and update as before.
-          if (!spec.startsWith('github:')) {
+          const registryLatest = spec.startsWith('github:') ? null : await fetchNpmLatest(name)
+          if (registryLatest !== null) {
             const installedVersion = readInstalledVersion(config.profileDirPath, name)
-            const registryLatest = await fetchNpmLatest(name)
-            if (installedVersion !== null && registryLatest !== null && !isUpgrade(installedVersion, registryLatest)) {
+            if (installedVersion !== null && !isUpgrade(installedVersion, registryLatest)) {
               sendJson(response, 400, {
                 error: `already current: the registry's latest (${registryLatest}) is not newer than the installed ${installedVersion}, so updating would downgrade it`,
               })
@@ -216,7 +216,12 @@ export function mountInstallerRoutes(
           }
           installing = true
           try {
-            const outcome = await installPlugin(host, config.profile, config.profileDirPath, target)
+            // The expected version rides along so the outcome can flag a
+            // silently stale resolution instead of a phantom success.
+            const outcome = await installPlugin(host, config.profile, config.profileDirPath, target, {
+              name,
+              expectedVersion: registryLatest ?? undefined,
+            })
             // Outcome body, always 200 — see the install route.
             sendJson(response, 200, outcome)
           } finally {

@@ -42,6 +42,10 @@ export interface InstallOutcome {
   cancelled?: boolean
   error?: string
   staleRegistry?: boolean
+  /** Version actually present after an update add; null = no package dir. */
+  resolvedVersion?: string | null
+  /** Registry version the update was expected to land on. */
+  expectedVersion?: string
   installed: string[]
 }
 
@@ -279,6 +283,14 @@ export function InstallTab(props: { t: Translate; injected: InstallTabInjected }
               : <span>{op === 'update' ? t('updateFailed') : op === 'uninstall' ? t('uninstallFailed') : t('failed')}</span>}
             {!outcome.ok && outcome.error !== undefined && <p className="dpi-errorText">{outcome.error}</p>}
             {!outcome.ok && outcome.staleRegistry === true && <p className="dpi-hintText">{t('staleHint')}</p>}
+            {outcome.ok && outcome.expectedVersion !== undefined && outcome.resolvedVersion != null
+              && outcome.resolvedVersion !== outcome.expectedVersion && (
+              <p className="dpi-hintText">
+                {t('resolvedMismatch')
+                  .replace('{resolved}', outcome.resolvedVersion)
+                  .replace('{expected}', outcome.expectedVersion)}
+              </p>
+            )}
             {outcome.ok && !outcome.hot && (
               <span className="dpi-bannerHint">
                 {injected.desktop

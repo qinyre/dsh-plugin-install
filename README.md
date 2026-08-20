@@ -7,7 +7,7 @@
 
 ![「安装」标签页](docs/images/screenshot-install.png)
 
-安装、卸载与更新走的都是 `dsh plugin add / remove` 这条 CLI 路径，与命令行完全一致，`dsh.profile.bundles` 的同步由 CLI 负责，不存在第二套状态。已安装列表可以一键检查更新：npm 安装的对照 registry 的 latest 版本号，github 安装的对照仓库 HEAD 提交，本地链接则如实标注、不做检查；发现新版后单插件就地更新，更新前还会核对方向——registry 的 latest 不高于已装版本时拒绝执行，绝不把更新变成降级。装好之后，纯客户端插件刷新页面即可生效；组合较复杂的插件会明确提示需要重启，在 DSH Desktop 里页面上就有「重启服务」按钮（独立 dsh 下则提示手动重启）。
+安装、卸载与更新走的都是 `dsh plugin add / remove` 这条 CLI 路径，与命令行完全一致，`dsh.profile.bundles` 的同步由 CLI 负责，不存在第二套状态。已安装列表可以一键检查更新：npm 安装的对照 registry 的 latest 版本号，github 安装的对照仓库 HEAD 提交，本地链接则如实标注、不做检查；发现新版后单插件就地更新，更新前还会核对方向——registry 的 latest 不高于已装版本时拒绝执行，绝不把更新变成降级。每次 add 都附带 `--config.minimum-release-age=0`：pnpm 11 默认开启 24 小时发布冷静期，`@latest` 会被静默解析到窗口外的旧版本，发布当天点更新等于原地不动；界面上点名安装的包不受这层默认限制（旧版 pnpm 不认识该参数时自动去掉重试）。更新完成后还会核对实际落地的版本号，与 registry latest 不一致时如实提示，而不是谎报成功。装好之后，纯客户端插件刷新页面即可生效；组合较复杂的插件会明确提示需要重启，在 DSH Desktop 里页面上就有「重启服务」按钮（独立 dsh 下则提示手动重启）。
 
 ## 安装
 

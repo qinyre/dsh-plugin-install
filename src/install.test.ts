@@ -86,3 +86,49 @@ describe('installPlugin retry (publish-then-update race)', () => {
     expect(outcome.cancelled).toBe(true)
   })
 })
+
+describe('installPlugin cooldown bypass (pnpm minimumReleaseAge)', () => {
+  // pnpm 11 resolves `@latest` to the newest version OUTSIDE the 24h release
+  // cooldown unless the add disables it — silently reinstalling the old
+  // version on every day-one update.
+  it('adds with the cooldown disabled', async () => {
+    vi.mocked(runPlugin).mockReset().mockResolvedValueOnce(okRun)
+    await installPlugin(host, 'web', root, 'dsh-plugin-capabilities@latest')
+    expect(runPlugin).toHaveBeenCalledWith('web', ['add', '--config.minimum-release-age=0', 'dsh-plugin-capabilities@latest'])
+  })
+
+  it('retries plain when pnpm rejects the cooldown flag', async () => {
+    const unknownOption: InstallResult = {
+      exitCode: 1,
+      timedOut: false,
+      stdout: '',
+      stderr: "[ERROR] Unknown option: 'config.minimum-release-age'\nFor help, run: pnpm help add",
+      cancelled: false,
+    }
+    vi.mocked(runPlugin).mockReset()
+      .mockResolvedValueOnce(unknownOption)
+      .mockResolvedValueOnce(okRun)
+    const outcome = await installPlugin(host, 'web', root, 'dsh-plugin-atlas')
+    expect(runPlugin).toHaveBeenCalledTimes(2)
+    expect(runPlugin).toHaveBeenLastCalledWith('web', ['add', 'dsh-plugin-atlas'])
+    expect(outcome.ok).toBe(true)
+  })
+
+  it('reports the resolved version for the update path', async () => {
+    vi.mocked(runPlugin).mockReset().mockResolvedValueOnce(okRun)
+    const outcome = await installPlugin(host, 'web', root, 'dsh-plugin-install@latest', {
+      name: 'dsh-plugin-install',
+      expectedVersion: '0.2.3',
+    })
+    expect(outcome.ok).toBe(true)
+    expect(outcome.expectedVersion).toBe('0.2.3')
+    expect(outcome.resolvedVersion).toBeNull() // temp profile has no node_modules
+  })
+
+  it('omits version fields for a plain install', async () => {
+    vi.mocked(runPlugin).mockReset().mockResolvedValueOnce(okRun)
+    const outcome = await installPlugin(host, 'web', root, 'dsh-plugin-atlas')
+    expect(outcome.resolvedVersion).toBeUndefined()
+    expect(outcome.expectedVersion).toBeUndefined()
+  })
+})
