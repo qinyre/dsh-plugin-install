@@ -5,15 +5,20 @@
  * sidecar is supervised by the shell, and a raw re-exec would orphan it.
  *
  * The successor's home depends on how this host was launched. A host with a
- * terminal gets its own fresh console window (titled "dsh web") — the
- * predictable place to see it and to stop it again. A piped host (desktop-
- * style service launchers) takes the hidden detached path as before.
+ * terminal restarts into that same terminal: the relay is spawned with the
+ * old process's stdio (the original console's handles) and hands them to the
+ * successor, so its output keeps flowing into the original window — no
+ * second terminal is opened. A piped host (desktop-style service launchers)
+ * takes the hidden detached path as before.
  *
- * Why not re-attach to the original terminal: on machines whose process
+ * Why the successor is spawned detached even so: on machines whose process
  * governance kills non-detached children when their parent exits (verified
- * in isolation, plain console, no dsh involved), NOTHING spawned by the old
- * process survives its death unless detached — and a detached process has no
- * console to inherit. A dedicated window is the strongest guarantee left.
+ * in isolation, plain console, no dsh involved), nothing spawned by the old
+ * process survives its death unless detached — but a relay descendant does,
+ * which is why the relay sits in between. Console handles keep working
+ * across detachment (the shell still owns the window), but the successor is
+ * never ATTACHED, so Ctrl+C in the window reaches the waiting shell instead;
+ * closing the window — or killing the pid — is what stops the successor.
  */
 
 import { spawn } from 'node:child_process'
@@ -35,34 +40,25 @@ const argv = JSON.parse(process.env.DSH_RESTART_ARGV || '[]')
 const cwd = process.env.DSH_RESTART_CWD || undefined
 const parent = Number(process.env.DSH_RESTART_PARENT_PID || 0)
 let waited = 0
-trace('relay start attach=' + (process.env.DSH_RESTART_ATTACH === '1' ? 'window' : 'detached') + ' parent=' + parent)
+trace('relay start attach=' + (process.env.DSH_RESTART_ATTACH === '1' ? 'same-console' : 'detached') + ' parent=' + parent)
 const launch = () => {
   setTimeout(() => {
     if (argv.length === 0) process.exit(1)
     // The console window is a Windows construct; elsewhere (or if the host
     // was piped) the successor takes the hidden detached path.
     if (process.platform === 'win32' && process.env.DSH_RESTART_ATTACH === '1') {
-      // A dedicated console window roots the successor in its own cmd, so
-      // the orphan-kill at old-process exit can never reach it. Two batch
-      // stages: node's argument quoting escapes the quotes of a start
-      // command line into something cmd chokes on (the window never opens
-      // and cmd hangs), so the start line travels inside a starter batch
-      // instead, where cmd parses it natively.
-      const stamp = Date.now()
-      const payload = require('node:path').join(require('node:os').tmpdir(), 'dsh-web-restart-' + stamp + '.cmd')
-      const starter = require('node:path').join(require('node:os').tmpdir(), 'dsh-web-start-' + stamp + '.cmd')
-      const quote = (v) => '"' + v + '"'
-      const body = ['@echo off', 'cd /d ' + quote(cwd || process.cwd()), argv.map(quote).join(' '), 'del ' + quote(payload)].join('\\r\\n')
-      require('node:fs').writeFileSync(payload, body)
-      // No self-del on the starter: deleting the batch file cmd is currently
-      // reading turns into a nonzero exit for no benefit — it is sixty bytes
-      // in the temp directory.
-      require('node:fs').writeFileSync(starter, '@start "dsh web" ' + quote(payload) + '\\r\\n')
-      trace('opening console window via ' + starter)
-      const child = spawn('cmd.exe', ['/d', '/c', starter], { windowsHide: true, cwd })
-      child.on('exit', (code) => { trace('start exit code=' + code); process.exit(code === 0 ? 0 : 1) })
-      child.on('error', (e) => { trace('start error ' + e); process.exit(1) })
-      return
+      // Same-terminal restart: this relay was spawned with the old process's
+      // stdio — the original console's handles — and the successor inherits
+      // them in turn, so its output lands in the original window instead of
+      // a second terminal. Detached keeps the governance kill at old-process
+      // exit from reaching it; the handles stay writable because the shell
+      // still owns the console. Direct spawn (no start command, no batch
+      // files): spawn passes argv natively, which is exactly what the old
+      // window path's cmd quoting dance worked around.
+      const child = spawn(argv[0], argv.slice(1), { detached: true, stdio: 'inherit', cwd })
+      child.unref()
+      trace('same-console successor pid=' + child.pid)
+      process.exit(child.pid === undefined ? 1 : 0)
     }
     const child = spawn(argv[0], argv.slice(1), { detached: true, stdio: 'ignore', windowsHide: true, cwd })
     child.unref()
@@ -115,9 +111,11 @@ export function scheduleSelfRestart(): void {
     try { writeFileAppending(debug, `${Date.now()} [old ${process.pid}] ${message}\n`) } catch { /* tracing owns nothing */ }
   }
   trace(`scheduling restart attached=${attached} argv=${env.DSH_RESTART_ARGV}`)
+  // stdio inherit is load-bearing in attach mode: the relay must hold the
+  // original console's handles or the successor has nothing to inherit.
   const relay = spawn(process.execPath, ['-e', RELAY_PROGRAM], {
     detached: true,
-    stdio: 'ignore',
+    stdio: 'inherit',
     windowsHide: true,
     env,
   })

@@ -1,8 +1,8 @@
 /**
  * The relay program's two modes, exercised as real processes: detached mode
  * must leave a running successor behind (verified through a file it writes),
- * and attach mode must keep the successor's output flowing through the relay
- * and mirror its exit code — that is the whole point of terminal handover.
+ * and attach mode must hand the relay's own stdio to a detached successor
+ * that outlives it — that is the whole point of same-terminal restarts.
  */
 
 import { mkdtempSync, readFileSync, rmSync, existsSync } from 'node:fs'
@@ -21,9 +21,8 @@ afterAll(() => {
   } catch { /* next tmp sweep owns it */ }
 })
 
-// Single-line on purpose: the window launcher writes the argv into a batch
-// file, and cmd cannot carry raw newlines inside a quoted argument (real
-// argv comes from a command line, so it never contains them either).
+// Single-line on purpose: real argv comes from a command line, which never
+// carries raw newlines either.
 const SUCCESSOR = "const fs = require('node:fs'); fs.writeFileSync(process.env.SUCCESSOR_FILE, process.env.SUCCESSOR_TEXT); setTimeout(() => process.exit(Number(process.env.SUCCESSOR_CODE)), 100)"
 
 function startRelay(env: Record<string, string>): Promise<{ code: number | null; stdout: string }> {
@@ -56,8 +55,9 @@ describe('restart relay', () => {
     expect(readFileSync(file, 'utf8')).toBe('detached-ok')
   }, 15_000)
 
-  // The window handover is cmd.exe mechanics; CI's ubuntu runner has none.
-  it.runIf(process.platform === 'win32')('attach mode: opens a console window whose successor runs and writes through', async () => {
+  // The attach branch is a direct spawn; the console-window mechanics it
+  // replaced are cmd.exe's, so CI's ubuntu runner has no stake in it.
+  it.runIf(process.platform === 'win32')('attach mode: hands its stdio to a detached successor that outlives it', async () => {
     const file = join(root, 'attached.txt')
     const relay = await startRelay({
       DSH_RESTART_ATTACH: '1',
@@ -67,8 +67,8 @@ describe('restart relay', () => {
       SUCCESSOR_TEXT: 'attached-ok',
       SUCCESSOR_CODE: '0',
     })
-    // The relay's job ends once `start` has opened the window; the
-    // successor lives in that window and writes its marker from there.
+    // The relay exits right after the unref'd detached spawn; the successor
+    // keeps running with the inherited stdio and writes its marker there.
     expect(relay.code).toBe(0)
     for (let i = 0; i < 60 && !existsSync(file); i++) {
       await new Promise(resolve => { setTimeout(resolve, 100) })
