@@ -188,6 +188,11 @@ export function InstallTab(props: { t: Translate; injected: InstallTabInjected }
       (status) => { if (current) { setPlugins(status.plugins); setBusy(status.active) } },
       () => { if (current) setPlugins([]) },
     )
+    // Opening the page checks updates on its own — non-forced, so the
+    // server's TTL cache answers instantly when the scheduled check is
+    // fresh, and a cold cache costs one deduped registry pass. The button
+    // remains for an immediate re-check.
+    void doCheckUpdates(false)
     return () => { current = false }
   }, [injected, reload])
 
