@@ -228,6 +228,39 @@ describe('setPluginMounted / stripPluginRows', () => {
     expect([...readDisabledIds(root, home)]).toEqual([])
   })
 
+  it('mounts over a foreign manager\'s pause rows ({ id, name, disabled })', () => {
+    // The linxin666 plugin-manager pauses with a `name` key; before 0.3.6
+    // resuming only stripped the exact two-key shape, so the mount click was
+    // a silent no-op and the plugin could never come back from that UI.
+    fakeBundle('demo-plugin', patch)
+    writeFileSync(join(root, 'cordis.patch.yml'), [
+      '- id: mcp-demo',
+      '  name: "@deepseek-ai/dsh-mcp-client"',
+      '  config: { serverName: demo }',
+      '- id: demo-plugin',
+      '  name: demo-plugin',
+      '  disabled: true',
+      '- id: not-ours',
+      '  name: someone-else',
+      '  disabled: true',
+    ].join('\n') + '\n', 'utf8')
+    setPluginMounted(root, readMountRows(root, 'demo-plugin'), true)
+    expect(parse(readFileSync(join(root, 'cordis.patch.yml'), 'utf8'))).toEqual([
+      { id: 'mcp-demo', name: '@deepseek-ai/dsh-mcp-client', config: { serverName: 'demo' } },
+      { id: 'not-ours', name: 'someone-else', disabled: true },
+    ])
+  })
+
+  it('re-pausing normalizes a foreign pause row and strip clears it too', () => {
+    fakeBundle('demo-plugin', patch)
+    writeFileSync(join(root, 'cordis.patch.yml'), '- id: demo-plugin\n  name: demo-plugin\n  disabled: true\n', 'utf8')
+    const rows = readMountRows(root, 'demo-plugin')
+    setPluginMounted(root, rows, false)
+    expect(parse(readFileSync(join(root, 'cordis.patch.yml'), 'utf8'))).toEqual([{ id: 'demo-plugin', disabled: true }])
+    stripPluginRows(root, rows)
+    expect(parse(readFileSync(join(root, 'cordis.patch.yml'), 'utf8'))).toEqual([])
+  })
+
   it('reports non-toggleable for bundles without a readable patch', () => {
     expect(readMountRows(root, 'ghost-plugin').toggleable).toBe(false)
     fakeBundle('grouped-plugin', '- insert:\n  - id: g\n    group: true\n')

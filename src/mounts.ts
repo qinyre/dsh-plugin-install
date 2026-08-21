@@ -194,28 +194,39 @@ export function readDisabledIds(profileDirPath: string, home = dshHome()): Set<s
  * True for rows this plugin owns. Primary signal: the per-row marker comment,
  * which survives re-parsing (even when a leading file comment merges into the
  * first row's commentBefore). Fallback signal: the exact managed shape
- * `{ id, disabled: true }` — nothing else writes rows that minimal.
+ * `{ id, disabled: true }` — nothing else writes rows that minimal. When the
+ * caller passes `ownIds`, a bare row carrying `disabled: true` for one of
+ * those ids counts too, whatever else it keys (`name` at least — the
+ * linxin666 plugin-manager pauses with `{ id, name, disabled: true }`); a
+ * pause row aimed at an id this bundle inserts can only mean this plugin,
+ * so resuming must clear it or the plugin can never come back.
  */
-function isManagedRow(item: unknown): item is YAMLMap {
+function isManagedRow(item: unknown, ownIds?: ReadonlySet<string>): item is YAMLMap {
   if (!(item instanceof YAMLMap)) return false
   if (String(item.commentBefore ?? '').includes(MANAGED_MARK)) return true
   const keys = item.items.map(pair => String(pair.key))
-  return keys.length === 2 && keys.includes('id') && keys.includes('disabled') && item.get('disabled') === true
+  if (keys.length === 2 && keys.includes('id') && keys.includes('disabled') && item.get('disabled') === true) return true
+  if (ownIds !== undefined && !item.has('insert') && item.get('disabled') === true) {
+    const id = item.get('id')
+    return typeof id === 'string' && ownIds.has(id)
+  }
+  return false
 }
 
 /**
  * The row ids this plugin currently owns in the profile layer — marked rows,
- * plus whatever sits inside a legacy 0.3.0 marker block, so a rescue rewrite
- * restores the paused state instead of silently re-enabling every plugin.
+ * whatever sits inside a legacy 0.3.0 marker block (so a rescue rewrite
+ * restores the paused state instead of silently re-enabling every plugin),
+ * and — under `ownIds` — foreign managers' pause rows aimed at those ids.
  */
-function readManagedIds(patchFile: string): string[] {
+function readManagedIds(patchFile: string, ownIds?: ReadonlySet<string>): string[] {
   if (!existsSync(patchFile)) return []
   const text = readFileSync(patchFile, 'utf8')
   const ids: string[] = [...legacyBlockIds(text)]
   const seq = parseLayer(text)?.contents
   if (seq instanceof YAMLSeq) {
     for (const item of seq.items) {
-      if (!isManagedRow(item)) continue
+      if (!isManagedRow(item, ownIds)) continue
       const id = item.get('id')
       if (typeof id === 'string' && !ids.includes(id)) ids.push(id)
     }
@@ -244,9 +255,11 @@ function isMarkerCommentLine(line: string): boolean {
  * comments, rows in either style — carries over through the document tree,
  * and the whole file renders in block style, because a flow-style root
  * cannot take block-style appends (the 0.3.0 failure). The composed output
- * is verified to parse before anything is written.
+ * is verified to parse before anything is written. `ownIds` widens row
+ * recognition to foreign managers' pause rows (see {@link isManagedRow}) and
+ * must be the same set the caller computed `ids` from.
  */
-export function writeManagedBlock(patchFile: string, ids: string[]): void {
+export function writeManagedBlock(patchFile: string, ids: string[], ownIds?: ReadonlySet<string>): void {
   const text = existsSync(patchFile) ? readFileSync(patchFile, 'utf8') : ''
   const doc = parseLayer(text)
   if (doc === null) {
@@ -259,7 +272,7 @@ export function writeManagedBlock(patchFile: string, ids: string[]): void {
   // them; rescue those lines back to the list head instead.
   const rescuedComments: string[] = []
   seq.items = seq.items.filter(item => {
-    if (!isManagedRow(item)) return true
+    if (!isManagedRow(item, ownIds)) return true
     for (const line of String(item.commentBefore ?? '').split('\n')) {
       if (line.trim() !== '' && !isMarkerCommentLine(line)) rescuedComments.push(line)
     }
@@ -318,8 +331,9 @@ function writeFileInPlace(file: string, content: string): void {
  */
 export function setPluginMounted(profileDirPath: string, rows: MountRows, mounted: boolean): void {
   const patchFile = join(profileDirPath, PROFILE_PATCH_FILE)
-  const others = readManagedIds(patchFile).filter(id => !rows.ids.includes(id))
-  writeManagedBlock(patchFile, mounted ? others : [...others, ...rows.ids])
+  const ownIds = new Set(rows.ids)
+  const others = readManagedIds(patchFile, ownIds).filter(id => !rows.ids.includes(id))
+  writeManagedBlock(patchFile, mounted ? others : [...others, ...rows.ids], ownIds)
 }
 
 /**
@@ -328,9 +342,10 @@ export function setPluginMounted(profileDirPath: string, rows: MountRows, mounte
  */
 export function stripPluginRows(profileDirPath: string, rows: MountRows): void {
   const patchFile = join(profileDirPath, PROFILE_PATCH_FILE)
-  const managed = readManagedIds(patchFile)
+  const ownIds = new Set(rows.ids)
+  const managed = readManagedIds(patchFile, ownIds)
   if (!rows.ids.some(id => managed.includes(id))) return
-  writeManagedBlock(patchFile, managed.filter(id => !rows.ids.includes(id)))
+  writeManagedBlock(patchFile, managed.filter(id => !rows.ids.includes(id)), ownIds)
 }
 
 /**
