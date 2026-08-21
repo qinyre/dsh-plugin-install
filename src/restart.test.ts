@@ -56,7 +56,8 @@ describe('restart relay', () => {
     expect(readFileSync(file, 'utf8')).toBe('detached-ok')
   }, 15_000)
 
-  it('attach mode: opens a console window whose successor runs and writes through', async () => {
+  // The window handover is cmd.exe mechanics; CI's ubuntu runner has none.
+  it.runIf(process.platform === 'win32')('attach mode: opens a console window whose successor runs and writes through', async () => {
     const file = join(root, 'attached.txt')
     const relay = await startRelay({
       DSH_RESTART_ATTACH: '1',

@@ -39,7 +39,9 @@ trace('relay start attach=' + (process.env.DSH_RESTART_ATTACH === '1' ? 'window'
 const launch = () => {
   setTimeout(() => {
     if (argv.length === 0) process.exit(1)
-    if (process.env.DSH_RESTART_ATTACH === '1') {
+    // The console window is a Windows construct; elsewhere (or if the host
+    // was piped) the successor takes the hidden detached path.
+    if (process.platform === 'win32' && process.env.DSH_RESTART_ATTACH === '1') {
       // A dedicated console window roots the successor in its own cmd, so
       // the orphan-kill at old-process exit can never reach it. Two batch
       // stages: node's argument quoting escapes the quotes of a start
