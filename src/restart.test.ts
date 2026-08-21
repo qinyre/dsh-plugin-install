@@ -14,14 +14,17 @@ import { RELAY_PROGRAM } from './restart.ts'
 
 const root = mkdtempSync(join(tmpdir(), 'dsh-plugin-install-relay-'))
 afterAll(() => {
-  if (root.startsWith(tmpdir())) rmSync(root, { recursive: true, force: true })
+  // Best effort: a detached successor can outlive the test by a few ms and
+  // hold the directory on Windows.
+  try {
+    if (root.startsWith(tmpdir())) rmSync(root, { recursive: true, force: true })
+  } catch { /* next tmp sweep owns it */ }
 })
 
-const SUCCESSOR = `
-const fs = require('node:fs')
-fs.writeFileSync(process.env.SUCCESSOR_FILE, process.env.SUCCESSOR_TEXT)
-setTimeout(() => process.exit(Number(process.env.SUCCESSOR_CODE)), 100)
-`
+// Single-line on purpose: the window launcher writes the argv into a batch
+// file, and cmd cannot carry raw newlines inside a quoted argument (real
+// argv comes from a command line, so it never contains them either).
+const SUCCESSOR = "const fs = require('node:fs'); fs.writeFileSync(process.env.SUCCESSOR_FILE, process.env.SUCCESSOR_TEXT); setTimeout(() => process.exit(Number(process.env.SUCCESSOR_CODE)), 100)"
 
 function startRelay(env: Record<string, string>): Promise<{ code: number | null; stdout: string }> {
   return new Promise((resolve) => {
@@ -53,7 +56,7 @@ describe('restart relay', () => {
     expect(readFileSync(file, 'utf8')).toBe('detached-ok')
   }, 15_000)
 
-  it('attach mode: successor output flows through the relay and the exit code mirrors', async () => {
+  it('attach mode: opens a console window whose successor runs and writes through', async () => {
     const file = join(root, 'attached.txt')
     const relay = await startRelay({
       DSH_RESTART_ATTACH: '1',
@@ -61,11 +64,36 @@ describe('restart relay', () => {
       DSH_RESTART_CWD: root,
       SUCCESSOR_FILE: file,
       SUCCESSOR_TEXT: 'attached-ok',
-      SUCCESSOR_CODE: '7',
+      SUCCESSOR_CODE: '0',
     })
-    // The relay outlives the successor and hands its exit code back.
-    expect(relay.code).toBe(7)
-    expect(relay.stdout).toBe('')
+    // The relay's job ends once `start` has opened the window; the
+    // successor lives in that window and writes its marker from there.
+    expect(relay.code).toBe(0)
+    for (let i = 0; i < 60 && !existsSync(file); i++) {
+      await new Promise(resolve => { setTimeout(resolve, 100) })
+    }
     expect(readFileSync(file, 'utf8')).toBe('attached-ok')
+  }, 20_000)
+
+  it('waits for the old process to exit before launching the successor', async () => {
+    const file = join(root, 'waited.txt')
+    // A stand-in "old process" that lives 600ms — the successor must appear
+    // only after it is gone (the EADDRINUSE race this guards against).
+    const old = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 600)'])
+    const relay = await startRelay({
+      DSH_RESTART_PARENT_PID: String(old.pid),
+      DSH_RESTART_ARGV: JSON.stringify([process.execPath, '-e', SUCCESSOR]),
+      DSH_RESTART_CWD: root,
+      SUCCESSOR_FILE: file,
+      SUCCESSOR_TEXT: 'waited-ok',
+      SUCCESSOR_CODE: '0',
+    })
+    expect(relay.code).toBe(0)
+    // The detached successor needs a moment to be scheduled before its very
+    // first statement lands.
+    for (let i = 0; i < 40 && !existsSync(file); i++) {
+      await new Promise(resolve => { setTimeout(resolve, 100) })
+    }
+    expect(readFileSync(file, 'utf8')).toBe('waited-ok')
   }, 15_000)
 })

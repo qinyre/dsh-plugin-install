@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-install",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "description": "Install any dsh plugin by npm spec — right inside Settings. · 在设置页里按包名安装任意 dsh 插件（不经过插件市场）。",
   "type": "module",
   "main": "lib/index.js",
