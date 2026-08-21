@@ -5,20 +5,24 @@
  * sidecar is supervised by the shell, and a raw re-exec would orphan it.
  *
  * The successor's home depends on how this host was launched. A host with a
- * terminal restarts into that same terminal: the relay is spawned with the
- * old process's stdio (the original console's handles) and hands them to the
- * successor, so its output keeps flowing into the original window — no
- * second terminal is opened. A piped host (desktop-style service launchers)
+ * terminal restarts into that same terminal via a PowerShell handover: a
+ * console cannot travel across detachment (the relay must be detached to
+ * survive — see below — and node gives a detached child broken stdio), so
+ * the helper ATTACHES itself to the old process's still-live console with
+ * AttachConsole, waits for the old process to exit, then starts the
+ * successor with -NoNewWindow. Attached means real rendering AND Ctrl+C
+ * reaching the successor. A piped host (desktop-style service launchers)
  * takes the hidden detached path as before.
  *
- * Why the successor is spawned detached even so: on machines whose process
- * governance kills non-detached children when their parent exits (verified
- * in isolation, plain console, no dsh involved), nothing spawned by the old
- * process survives its death unless detached — but a relay descendant does,
- * which is why the relay sits in between. Console handles keep working
- * across detachment (the shell still owns the window), but the successor is
- * never ATTACHED, so Ctrl+C in the window reaches the waiting shell instead;
- * closing the window — or killing the pid — is what stops the successor.
+ * Why the indirection at all: on machines whose process governance kills
+ * non-detached children when their parent exits (verified in isolation,
+ * plain console, no dsh involved), nothing spawned by the old process
+ * survives its death unless detached — so the detached relay sits between.
+ * The PowerShell helper itself is spawned through conhost --headless:
+ * powershell.exe is a console application and silently refuses to run with
+ * no console at all, while windowsHide's CREATE_NO_WINDOW console would
+ * make AttachConsole fail with "already attached" — FreeConsole first
+ * handles that case too.
  */
 
 import { spawn } from 'node:child_process'
@@ -40,24 +44,53 @@ const argv = JSON.parse(process.env.DSH_RESTART_ARGV || '[]')
 const cwd = process.env.DSH_RESTART_CWD || undefined
 const parent = Number(process.env.DSH_RESTART_PARENT_PID || 0)
 let waited = 0
-trace('relay start attach=' + (process.env.DSH_RESTART_ATTACH === '1' ? 'same-console' : 'detached') + ' parent=' + parent)
+trace('relay start attach=' + (process.env.DSH_RESTART_ATTACH === '1' ? 'terminal-handover' : 'detached') + ' parent=' + parent)
+// Same-terminal handover (Windows TTY hosts): the PowerShell helper must
+// AttachConsole while the old process still owns its console, so it starts
+// right now and does its own waiting; every other path keeps the fixed
+// pause plus parent-gone poll below.
+let handedOver = false
+if (process.platform === 'win32' && process.env.DSH_RESTART_ATTACH === '1' && argv.length > 0) {
+  try {
+    const ps1 = require('node:path').join(require('node:os').tmpdir(), 'dsh-web-restart-' + Date.now() + '.ps1')
+    const body = [
+      '$ErrorActionPreference="Continue"',
+      '$sig=\\'using System;using System.Runtime.InteropServices;public class K32{[DllImport("kernel32.dll",SetLastError=true)]public static extern bool AttachConsole(uint p);[DllImport("kernel32.dll")]public static extern bool FreeConsole();}\\'',
+      'try{Add-Type -TypeDefinition $sig}catch{}',
+      '$ok=$false',
+      'try{$null=[K32]::FreeConsole();$ok=[K32]::AttachConsole([uint32]$env:DSH_RESTART_OLDPID)}catch{}',
+      'if($env:DSH_RESTART_DEBUG){Add-Content -LiteralPath $env:DSH_RESTART_DEBUG -Value ("PS attach="+$ok)}',
+      'while($true){try{Get-Process -Id ([int]$env:DSH_RESTART_OLDPID) -ErrorAction Stop|Out-Null;Start-Sleep -Milliseconds 100}catch{break}}',
+      'Start-Sleep -Milliseconds 400',
+      '$av=ConvertFrom-Json $env:DSH_RESTART_ARGV',
+      '$rest=@();if($av.Count -gt 1){$rest=@($av[1..($av.Count-1)])}',
+      '$p=Start-Process -FilePath $av[0] -ArgumentList $rest -WorkingDirectory $env:DSH_RESTART_CWD -NoNewWindow -PassThru',
+      'if($env:DSH_RESTART_DEBUG){Add-Content -LiteralPath $env:DSH_RESTART_DEBUG -Value ("PS successor pid="+$p.Id)}',
+    ].join('\\r\\n')
+    require('node:fs').writeFileSync(ps1, body)
+    // powershell.exe is a console app: fully detached it silently refuses to
+    // run, windowsHide's CREATE_NO_WINDOW console makes AttachConsole fail
+    // with "already attached" — a headless conhost gives it a disposable
+    // console of its own that FreeConsole immediately gives up.
+    const h = spawn('conhost.exe', ['--headless', 'powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ps1], { detached: true, stdio: 'ignore' })
+    h.unref()
+    trace('handover helper spawned pid=' + h.pid)
+    handedOver = true
+  } catch (error) {
+    trace('handover setup failed, falling back to hidden detached: ' + (error && error.stack || error))
+  }
+  if (handedOver) process.exit(0)
+}
 const launch = () => {
   setTimeout(() => {
     if (argv.length === 0) process.exit(1)
     // The console window is a Windows construct; elsewhere (or if the host
-    // was piped) the successor takes the hidden detached path.
+    // was piped, or the handover helper could not be started) the successor
+    // takes the hidden detached path.
     if (process.platform === 'win32' && process.env.DSH_RESTART_ATTACH === '1') {
-      // Same-terminal restart: this relay was spawned with the old process's
-      // stdio — the original console's handles — and the successor inherits
-      // them in turn, so its output lands in the original window instead of
-      // a second terminal. Detached keeps the governance kill at old-process
-      // exit from reaching it; the handles stay writable because the shell
-      // still owns the console. Direct spawn (no start command, no batch
-      // files): spawn passes argv natively, which is exactly what the old
-      // window path's cmd quoting dance worked around.
-      const child = spawn(argv[0], argv.slice(1), { detached: true, stdio: 'inherit', cwd })
+      const child = spawn(argv[0], argv.slice(1), { detached: true, stdio: 'ignore', cwd })
       child.unref()
-      trace('same-console successor pid=' + child.pid)
+      trace('fallback same-console successor pid=' + child.pid)
       process.exit(child.pid === undefined ? 1 : 0)
     }
     const child = spawn(argv[0], argv.slice(1), { detached: true, stdio: 'ignore', windowsHide: true, cwd })
@@ -103,6 +136,9 @@ export function scheduleSelfRestart(): void {
     DSH_RESTART_ARGV: JSON.stringify([process.execPath, ...process.execArgv, ...process.argv.slice(1)]),
     DSH_RESTART_CWD: process.cwd(),
     DSH_RESTART_PARENT_PID: String(process.pid),
+    // The handover helper attaches to THIS process's console while it is
+    // still alive — its pid, not the relay's.
+    DSH_RESTART_OLDPID: String(process.pid),
   }
   if (attached) env.DSH_RESTART_ATTACH = '1'
   const debug = process.env.DSH_RESTART_DEBUG
@@ -111,11 +147,9 @@ export function scheduleSelfRestart(): void {
     try { writeFileAppending(debug, `${Date.now()} [old ${process.pid}] ${message}\n`) } catch { /* tracing owns nothing */ }
   }
   trace(`scheduling restart attached=${attached} argv=${env.DSH_RESTART_ARGV}`)
-  // stdio inherit is load-bearing in attach mode: the relay must hold the
-  // original console's handles or the successor has nothing to inherit.
   const relay = spawn(process.execPath, ['-e', RELAY_PROGRAM], {
     detached: true,
-    stdio: 'inherit',
+    stdio: 'ignore',
     windowsHide: true,
     env,
   })
