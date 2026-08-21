@@ -50,7 +50,7 @@ export const progress: InstallProgress = {
 function killTree(child: ChildProcess): void {
   if (process.platform === 'win32' && child.pid !== undefined) {
     try {
-      spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], { stdio: 'ignore' })
+      spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], { stdio: 'ignore', windowsHide: true })
       return
     } catch { /* fall through */ }
   }
@@ -105,6 +105,12 @@ export function runPlugin(profile: string, pluginArgs: string[], opts: { env?: N
     env: opts.env ?? process.env,
     stdio: ['ignore', 'pipe', 'pipe'],
     shell: viaShell,
+    // The chain below re-runs cmd shims (`dsh`, then pnpm via the CLI's
+    // shell:true forwarder). Without this flag each layer allocates a
+    // visible console when the host has none to inherit — the flashing cmd
+    // windows on standalone web. A hidden console here is inherited by the
+    // whole subtree, so one flag covers every layer.
+    windowsHide: true,
   })
   activeChild = child
   cancelRequested = false
