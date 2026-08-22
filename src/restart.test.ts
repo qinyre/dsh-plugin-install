@@ -63,6 +63,7 @@ describe('restart relay', () => {
   // bin.js path plus plain flags).
   it.runIf(process.platform === 'win32')('attach mode: the PowerShell helper starts the successor once the old process is gone', async () => {
     const file = join(root, 'attached.txt')
+    const dbg = join(root, 'relay-debug.log')
     const succ = join(root, 'succ.cjs')
     writeFileSync(succ, "require('node:fs').writeFileSync(process.env.SUCCESSOR_FILE, process.env.SUCCESSOR_TEXT)")
     const relay = await startRelay({
@@ -76,12 +77,21 @@ describe('restart relay', () => {
       SUCCESSOR_FILE: file,
       SUCCESSOR_TEXT: 'attached-ok',
       SUCCESSOR_CODE: '0',
+      DSH_RESTART_DEBUG: dbg,
     })
     // The relay exits right after spawning the helper; the helper starts
     // the successor on its own schedule (PowerShell warm-up included).
     expect(relay.code).toBe(0)
     for (let i = 0; i < 120 && !existsSync(file); i++) {
       await new Promise(resolve => { setTimeout(resolve, 100) })
+    }
+    if (!existsSync(file)) {
+      // The helper chain fails invisibly by design (detached, stdio off), so
+      // a CI-only death must surface both sides: what the relay traced and
+      // whether PowerShell got far enough to append its own lines.
+      let trace = ''
+      try { trace = readFileSync(dbg, 'utf8') } catch { trace = '(no trace file)' }
+      throw new Error(`attached.txt never appeared\nrelay stdout: ${JSON.stringify(relay.stdout)}\nhelper trace:\n${trace}`)
     }
     expect(readFileSync(file, 'utf8')).toBe('attached-ok')
   }, 30_000)
