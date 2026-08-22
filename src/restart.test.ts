@@ -81,8 +81,10 @@ describe('restart relay', () => {
     })
     // The relay exits right after spawning the helper; the helper starts
     // the successor on its own schedule (PowerShell warm-up included).
+    // CI runners cold-start powershell.exe plus an Add-Type csc compile in
+    // the tens of seconds — the poll rides the full vitest budget.
     expect(relay.code).toBe(0)
-    for (let i = 0; i < 120 && !existsSync(file); i++) {
+    for (let i = 0; i < 280 && !existsSync(file); i++) {
       await new Promise(resolve => { setTimeout(resolve, 100) })
     }
     if (!existsSync(file)) {
