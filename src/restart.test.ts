@@ -103,6 +103,63 @@ describe('restart relay', () => {
     expect(readFileSync(file, 'utf8')).toBe('attached-ok')
   }, 30_000)
 
+  // The helper chain can be killed outright by script-hardening AV (proven on
+  // hosted CI: conhost spawned, PowerShell never executed a line) — the relay
+  // must notice the silence and start the successor itself instead of leaving
+  // the user with a closed app. HELPER=0 suppresses the helper so the
+  // watchdog path runs deterministically here and on CI alike.
+  it.runIf(process.platform === 'win32')('watchdog: a silent helper does not strand the restart — the relay starts the successor itself', async () => {
+    const file = join(root, 'watchdog.txt')
+    const succ = join(root, 'succ.cjs')
+    writeFileSync(succ, "require('node:fs').writeFileSync(process.env.SUCCESSOR_FILE, process.env.SUCCESSOR_TEXT)")
+    const t0 = Date.now()
+    const relay = await startRelay({
+      DSH_RESTART_ATTACH: '1',
+      DSH_RESTART_HELPER: '0',
+      DSH_RESTART_WATCHDOG_MS: '1200',
+      DSH_RESTART_OLDPID: '99999',
+      DSH_RESTART_ARGV: JSON.stringify([process.execPath, succ]),
+      DSH_RESTART_CWD: root,
+      SUCCESSOR_FILE: file,
+      SUCCESSOR_TEXT: 'watchdog-ok',
+      SUCCESSOR_CODE: '0',
+    })
+    expect(relay.code).toBe(0)
+    // The relay must have stayed alive for the watchdog window instead of
+    // exiting right after the (suppressed) handover.
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(1100)
+    for (let i = 0; i < 50 && !existsSync(file); i++) {
+      await new Promise(resolve => { setTimeout(resolve, 100) })
+    }
+    expect(readFileSync(file, 'utf8')).toBe('watchdog-ok')
+  }, 20_000)
+
+  // The claim file is the double-start arbiter between helper and watchdog:
+  // whoever creates it first owns the successor, and a relay that finds it
+  // already present must stand down entirely.
+  it.runIf(process.platform === 'win32')('watchdog: an existing claim stops the relay from starting anything', async () => {
+    const file = join(root, 'claimed.txt')
+    const succ = join(root, 'succ.cjs')
+    writeFileSync(succ, "require('node:fs').writeFileSync(process.env.SUCCESSOR_FILE, process.env.SUCCESSOR_TEXT)")
+    // Someone (the helper, in production terms) has already filed the claim.
+    writeFileSync(join(root, 'pre.claim'), '')
+    const relay = await startRelay({
+      DSH_RESTART_ATTACH: '1',
+      DSH_RESTART_HELPER: '0',
+      DSH_RESTART_WATCHDOG_MS: '600',
+      DSH_RESTART_CLAIM: join(root, 'pre.claim'),
+      DSH_RESTART_OLDPID: '99999',
+      DSH_RESTART_ARGV: JSON.stringify([process.execPath, succ]),
+      DSH_RESTART_CWD: root,
+      SUCCESSOR_FILE: file,
+      SUCCESSOR_TEXT: 'claimed-ok',
+      SUCCESSOR_CODE: '0',
+    })
+    expect(relay.code).toBe(0)
+    await new Promise(resolve => { setTimeout(resolve, 2500) })
+    expect(existsSync(file)).toBe(false)
+  }, 15_000)
+
   it('waits for the old process to exit before launching the successor', async () => {
     const file = join(root, 'waited.txt')
     // A stand-in "old process" that lives 600ms — the successor must appear

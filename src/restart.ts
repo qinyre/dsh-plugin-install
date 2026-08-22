@@ -50,9 +50,14 @@ trace('relay start attach=' + (process.env.DSH_RESTART_ATTACH === '1' ? 'termina
 // right now and does its own waiting; every other path keeps the fixed
 // pause plus parent-gone poll below.
 let handedOver = false
+// Double-start arbiter between the helper and the relay's own watchdog:
+// whoever creates this file first owns the successor, the loser stands down.
+let claim = ''
 if (process.platform === 'win32' && process.env.DSH_RESTART_ATTACH === '1' && argv.length > 0) {
   try {
-    const ps1 = require('node:path').join(require('node:os').tmpdir(), 'dsh-web-restart-' + Date.now() + '.ps1')
+    const stamp = Date.now()
+    const ps1 = require('node:path').join(require('node:os').tmpdir(), 'dsh-web-restart-' + stamp + '.ps1')
+    claim = process.env.DSH_RESTART_CLAIM || require('node:path').join(require('node:os').tmpdir(), 'dsh-web-restart-' + stamp + '.go')
     const body = [
       '$ErrorActionPreference="Continue"',
       '$sig=\\'using System;using System.Runtime.InteropServices;public class K32{[DllImport("kernel32.dll",SetLastError=true)]public static extern bool AttachConsole(uint p);[DllImport("kernel32.dll")]public static extern bool FreeConsole();}\\'',
@@ -62,6 +67,7 @@ if (process.platform === 'win32' && process.env.DSH_RESTART_ATTACH === '1' && ar
       'if($env:DSH_RESTART_DEBUG){Add-Content -LiteralPath $env:DSH_RESTART_DEBUG -Value ("PS attach="+$ok)}',
       'while($true){try{Get-Process -Id ([int]$env:DSH_RESTART_OLDPID) -ErrorAction Stop|Out-Null;Start-Sleep -Milliseconds 100}catch{break}}',
       'Start-Sleep -Milliseconds 400',
+      'try{$null=[io.file]::Open($env:DSH_RESTART_CLAIM,"CreateNew","ReadWrite").Close()}catch{if($env:DSH_RESTART_DEBUG){Add-Content -LiteralPath $env:DSH_RESTART_DEBUG -Value ("PS claim lost, standing down")}exit}',
       '$av=ConvertFrom-Json $env:DSH_RESTART_ARGV',
       '$rest=@();if($av.Count -gt 1){$rest=@($av[1..($av.Count-1)])}',
       '$p=Start-Process -FilePath $av[0] -ArgumentList $rest -WorkingDirectory $env:DSH_RESTART_CWD -NoNewWindow -PassThru',
@@ -72,14 +78,56 @@ if (process.platform === 'win32' && process.env.DSH_RESTART_ATTACH === '1' && ar
     // run, windowsHide's CREATE_NO_WINDOW console makes AttachConsole fail
     // with "already attached" — a headless conhost gives it a disposable
     // console of its own that FreeConsole immediately gives up.
-    const h = spawn('conhost.exe', ['--headless', 'powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ps1], { detached: true, stdio: 'ignore' })
-    h.unref()
-    trace('handover helper spawned pid=' + h.pid)
+    if (process.env.DSH_RESTART_HELPER === '0') {
+      // Test and escape hatch: skip the helper entirely so the watchdog owns
+      // the handover deterministically (also what lets CI exercise this path).
+      trace('helper suppressed by DSH_RESTART_HELPER=0, the watchdog owns the handover')
+    } else {
+      const h = spawn('conhost.exe', ['--headless', 'powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ps1], { detached: true, stdio: 'ignore', env: Object.assign({}, process.env, { DSH_RESTART_CLAIM: claim }) })
+      h.unref()
+      trace('handover helper spawned pid=' + h.pid)
+    }
     handedOver = true
   } catch (error) {
     trace('handover setup failed, falling back to hidden detached: ' + (error && error.stack || error))
   }
-  if (handedOver) process.exit(0)
+}
+if (handedOver) {
+  // Watchdog: the helper chain can die silently (script-hardening AV blocks
+  // the temp .ps1 before PowerShell runs a line — reproduced on hosted CI)
+  // and the old code exited right after the handover, stranding the restart.
+  // Poll for the claim; past the budget, claim it ourselves and start the
+  // successor hidden-detached after the old process is gone. A helper that
+  // was only slow finds the claim taken and exits without a double start.
+  const fs = require('node:fs')
+  const budgetMs = Number(process.env.DSH_RESTART_WATCHDOG_MS || 15000)
+  const t0 = Date.now()
+  const guard = setInterval(() => {
+    let claimedByHelper = false
+    try { claimedByHelper = fs.existsSync(claim) } catch { claimedByHelper = false }
+    if (claimedByHelper) { trace('helper claimed the successor after ' + (Date.now() - t0) + 'ms, relay stands down'); clearInterval(guard); process.exit(0) }
+    if (Date.now() - t0 < budgetMs) return
+    clearInterval(guard)
+    try { fs.closeSync(fs.openSync(claim, 'wx')) } catch (error) { trace('claim race lost: ' + (error && error.message || error)); process.exit(0) }
+    trace('helper silent for ' + (Date.now() - t0) + 'ms, watchdog takes the fallback')
+    let waitedParent = 0
+    const handoff = () => {
+      // Same parent-gone gate as the plain path: never race the old process
+      // for the port (a heavy profile can dispose for seconds).
+      let alive = false
+      if (parent) {
+        alive = true
+        try { process.kill(parent, 0) } catch (error) { alive = error.code !== 'ESRCH' }
+      }
+      if (alive && (waitedParent += 100) < 7000) { setTimeout(handoff, 100); return }
+      if (alive) trace('parent still alive after ' + waitedParent + 'ms, launching anyway like the plain path')
+      const child = spawn(argv[0], argv.slice(1), { detached: true, stdio: 'ignore', cwd })
+      child.unref()
+      trace('watchdog fallback successor pid=' + (child.pid === undefined ? 'none' : child.pid))
+      process.exit(child.pid === undefined ? 1 : 0)
+    }
+    setTimeout(handoff, 250)
+  }, 200)
 }
 const launch = () => {
   setTimeout(() => {
@@ -99,13 +147,15 @@ const launch = () => {
     process.exit(child.pid === undefined ? 1 : 0)
   }, 250)
 }
-if (!parent) { launch() } else {
-  const tick = () => {
-    let alive = true
-    try { process.kill(parent, 0) } catch (error) { alive = error.code !== 'ESRCH' }
-    if (!alive || (waited += 100) >= 7000) { trace('parent gone (alive=' + alive + ')'); launch() } else { setTimeout(tick, 100) }
+if (!handedOver) {
+  if (!parent) { launch() } else {
+    const tick = () => {
+      let alive = true
+      try { process.kill(parent, 0) } catch (error) { alive = error.code !== 'ESRCH' }
+      if (!alive || (waited += 100) >= 7000) { trace('parent gone (alive=' + alive + ')'); launch() } else { setTimeout(tick, 100) }
+    }
+    tick()
   }
-  tick()
 }
 `
 export { RELAY_PROGRAM }
