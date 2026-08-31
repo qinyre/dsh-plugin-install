@@ -116,17 +116,34 @@ export function apply(ctx: InstallClientContext): void {
         window.dshDesktop?.restartSidecar?.()
       },
       restartWeb: async (): Promise<void> => {
-        // Standalone: the host relaunches itself through a detached relay;
-        // poll until the new process answers, then reload into it.
-        await fetchJson('/dsh-plugin-install/restart', { method: 'POST' })
-        const deadline = Date.now() + 45_000
+        // Standalone: the host relaunches itself through a detached relay.
+        // dsh 0.1.2+ mints a fresh launch token per boot, so the tab cannot
+        // just reload — poll until a NEW process generation answers, ask it
+        // for its tokened URL, and navigate there. A missing/failed handoff
+        // falls back to a plain reload, which still works whenever this tab
+        // holds a valid session cookie (stable port, persisted secret).
+        const before = await fetchJson<{ boot?: string }>('/dsh-plugin-install/status')
+          .then(status => status.boot)
+          .catch(() => undefined)
+        const accepted = await fetchJson<{ handoff?: string }>('/dsh-plugin-install/restart', { method: 'POST' })
+        const deadline = Date.now() + 90_000
         for (;;) {
           await new Promise(resolve => { setTimeout(resolve, 1000) })
+          if (Date.now() > deadline) throw new Error('restart did not come back within 90s')
           try {
-            await fetchJson<InstallStatus>('/dsh-plugin-install/status')
-            break
+            const status = await fetchJson<{ boot?: string }>('/dsh-plugin-install/status')
+            if (status.boot !== undefined && status.boot !== before) break
           } catch {
-            if (Date.now() > deadline) throw new Error('restart did not come back within 45s')
+            /* still down — or the old generation is still disposing */
+          }
+        }
+        if (accepted.handoff !== undefined) {
+          try {
+            const handed = await fetchJson<{ url: string }>(`/dsh-plugin-install/handoff?nonce=${encodeURIComponent(accepted.handoff)}`)
+            window.location.replace(handed.url)
+            return
+          } catch {
+            /* no handoff arranged (or it closed): reload instead */
           }
         }
         window.location.reload()

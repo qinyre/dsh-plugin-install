@@ -44,7 +44,17 @@ export function apply(ctx: Context, config?: Config): void {
   const dirPath = profileDir(profile)
   ctx.inject(['webServer'], (hostCtx: Context) => {
     const host = asInstallerHost(hostCtx as Context & { webServer: WebServerService })
-    ctx.effect(() => mountInstallerRoutes(host, { profile, profileDirPath: dirPath }), 'dsh-plugin-install: http routes')
+    // dsh 0.1.2+ gives every boot a fresh launch token; the restart handoff
+    // route needs this process's tokened URL. The connection service carries
+    // that token and may mount after webServer, so resolve both lazily per
+    // request (ctx.get answers undefined for a not-yet-active service).
+    const tokenedUrl = (): string | undefined => {
+      const port = host.webServer.port
+      if (port === undefined) return undefined
+      const connection = hostCtx.get('connection') as { authenticatedUrl?(baseUrl: string): string } | undefined
+      return connection?.authenticatedUrl?.(`http://127.0.0.1:${port}`)
+    }
+    ctx.effect(() => mountInstallerRoutes(host, { profile, profileDirPath: dirPath, tokenedUrl }), 'dsh-plugin-install: http routes')
     ctx.effect(() => scheduleUpdateChecks(dirPath), 'dsh-plugin-install: scheduled update checks')
   })
 }

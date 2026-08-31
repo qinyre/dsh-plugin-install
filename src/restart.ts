@@ -26,7 +26,47 @@
  */
 
 import { spawn } from 'node:child_process'
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 import { appendFileSync as writeFileAppending } from 'node:fs'
+
+/**
+ * Identity of this process generation. dsh 0.1.2 gives every `dsh web` boot a
+ * fresh launch token, so a restarting browser tab can no longer assume the
+ * process that answers its poll is a NEW one — it watches this id change.
+ */
+export const BOOT_ID: string = randomUUID()
+
+/** When this process started; bounds how long a restart handoff stays open. */
+export const BOOT_AT: number = Date.now()
+
+/**
+ * How long after boot the handoff route will trade its nonce for this
+ * process's tokened URL. The nonce is unguessable, but the window keeps a
+ * leaked one from being replayed at some later boot.
+ */
+const HANDOFF_WINDOW_MS = 120_000
+
+/** Mint the one-restart nonce the old page holds and the successor checks. */
+export function newHandoffNonce(): string {
+  return randomBytes(32).toString('base64url')
+}
+
+/**
+ * Timing-safe nonce comparison. Both sides are hashed to a fixed length
+ * first, so candidate length never leaks through timingSafeEqual's
+ * length check.
+ */
+export function nonceMatches(actual: string | undefined, expected: string | undefined): boolean {
+  if (actual === undefined || expected === undefined) return false
+  const left = createHash('sha256').update(actual).digest()
+  const right = createHash('sha256').update(expected).digest()
+  return timingSafeEqual(left, right)
+}
+
+/** True while this process still accepts a restart handoff exchange. */
+export function handoffWindowOpen(now: number = Date.now()): boolean {
+  return now - BOOT_AT <= HANDOFF_WINDOW_MS
+}
 
 /**
  * The relay program: wait until the old process is truly gone (a heavy
@@ -174,11 +214,16 @@ export function canSelfRestart(): boolean {
  * Spawn the relay and exit this process. Called only after the HTTP response
  * has flushed, so the browser already holds its `ok` before the port drops.
  *
+ * `handoff` is the nonce returned to the restarting tab: the relay's
+ * environment flows to the successor, whose /dsh-plugin-install/handoff route
+ * trades this nonce for the successor's own tokened URL — the only way the
+ * old tab can re-enter a dsh 0.1.2+ process that minted a fresh launch token.
+ *
  * Shutdown prefers the graceful path: profile-boot listens for SIGTERM and
  * disposes the tree (bounded by its own shutdown controller) before exiting;
  * the detached relay outlives every possible exit timing.
  */
-export function scheduleSelfRestart(): void {
+export function scheduleSelfRestart(handoff?: string): void {
   if (!canSelfRestart()) return
   const attached = process.stdout?.isTTY === true || process.stdin?.isTTY === true
   const env: NodeJS.ProcessEnv = {
@@ -190,6 +235,7 @@ export function scheduleSelfRestart(): void {
     // still alive — its pid, not the relay's.
     DSH_RESTART_OLDPID: String(process.pid),
   }
+  if (handoff !== undefined) env.DSH_RESTART_HANDOFF = handoff
   if (attached) env.DSH_RESTART_ATTACH = '1'
   const debug = process.env.DSH_RESTART_DEBUG
   const trace = (message: string): void => {

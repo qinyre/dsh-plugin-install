@@ -53,6 +53,8 @@ export interface WebServerService {
     path: string
     handler: (request: IncomingMessage, response: ServerResponse) => void | Promise<void>
   }): () => void
+  /** The listening port; undefined only in stubs that never bound one. */
+  readonly port?: number
 }
 
 import type { IncomingMessage, ServerResponse } from 'node:http'

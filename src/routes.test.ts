@@ -9,7 +9,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { afterAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('./install.ts', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./install.ts')>()
@@ -36,7 +36,7 @@ afterAll(() => {
 })
 
 /** Mount the routes over a capturing webServer stub; profile lives in `root`. */
-function mountRoutes(): Map<string, (request: IncomingMessage, response: ServerResponse) => void | Promise<void>> {
+function mountRoutes(tokenedUrl?: () => string | undefined): Map<string, (request: IncomingMessage, response: ServerResponse) => void | Promise<void>> {
   const routes = new Map<string, (request: IncomingMessage, response: ServerResponse) => void | Promise<void>>()
   const webServer: WebServerService = {
     register: (route) => {
@@ -48,7 +48,7 @@ function mountRoutes(): Map<string, (request: IncomingMessage, response: ServerR
     webServer,
     plugin: () => ({ await: () => Promise.resolve(undefined), dispose: () => undefined }),
   }
-  mountInstallerRoutes(host, { profile: 'web', profileDirPath: root })
+  mountInstallerRoutes(host, { profile: 'web', profileDirPath: root, ...(tokenedUrl === undefined ? {} : { tokenedUrl }) })
   return routes
 }
 
@@ -61,6 +61,21 @@ async function post(path: string, body: unknown, routes: Map<string, (request: I
     headers: { origin: 'http://127.0.0.1:1', host: '127.0.0.1:1' },
     async *[Symbol.asyncIterator]() { if (payload.length > 0) yield payload },
   } as unknown as IncomingMessage
+  return await request_(request, routes, path)
+}
+
+/** GET by full path (query included); browsers may omit Origin on GETs. */
+async function get(path: string, routes: Map<string, (request: IncomingMessage, response: ServerResponse) => void | Promise<void>>): Promise<{ status: number; body: any }> {
+  const request = {
+    method: 'GET',
+    url: path,
+    headers: {},
+  } as unknown as IncomingMessage
+  return await request_(request, routes, path.split('?')[0])
+}
+
+/** Drive one registered handler with a capturing response stub. */
+async function request_(request: IncomingMessage, routes: Map<string, (request: IncomingMessage, response: ServerResponse) => void | Promise<void>>, path: string): Promise<{ status: number; body: any }> {
   let status = 0
   let text = ''
   const response = {
@@ -158,13 +173,16 @@ describe('mount route（挂载/停用）', () => {
 })
 
 describe('restart route（独立环境自重启）', () => {
-  it('answers ok standalone and hands off after the response', async () => {
+  it('answers ok standalone, returns the handoff nonce, and restarts with it', async () => {
     delete process.env.DSH_DESKTOP
     progress.active = false
     const { status, body } = await post('/dsh-plugin-install/restart', {}, mountRoutes())
     expect(status).toBe(200)
     expect(body).toMatchObject({ ok: true, restarting: true })
+    expect(typeof body.handoff).toBe('string')
+    expect(body.handoff.length).toBeGreaterThanOrEqual(40)
     expect(scheduleSelfRestart).toHaveBeenCalledTimes(1)
+    expect(scheduleSelfRestart).toHaveBeenCalledWith(body.handoff)
   })
 
   it('still refuses while a plugin operation is running', async () => {
@@ -173,5 +191,54 @@ describe('restart route（独立环境自重启）', () => {
     const { status } = await post('/dsh-plugin-install/restart', {}, mountRoutes())
     expect(status).toBe(409)
     progress.active = false
+  })
+
+  it('status carries this generation\'s boot id', async () => {
+    const { status, body } = await get('/dsh-plugin-install/status', mountRoutes())
+    expect(status).toBe(200)
+    expect(typeof body.boot).toBe('string')
+  })
+})
+
+describe('handoff route（重启交接换 tokened URL）', () => {
+  const original = process.env.DSH_RESTART_HANDOFF
+  const url = (): string => 'http://127.0.0.1:3080/?token=probe-token'
+
+  afterEach(() => {
+    if (original === undefined) delete process.env.DSH_RESTART_HANDOFF
+    else process.env.DSH_RESTART_HANDOFF = original
+  })
+
+  it('404 when this process is not a restart successor', async () => {
+    delete process.env.DSH_RESTART_HANDOFF
+    const { status, body } = await get('/dsh-plugin-install/handoff?nonce=anything', mountRoutes(url))
+    expect(status).toBe(404)
+    expect(body.error).toContain('no restart handoff')
+  })
+
+  it('403 on a wrong nonce', async () => {
+    process.env.DSH_RESTART_HANDOFF = 'right-nonce'
+    const { status } = await get('/dsh-plugin-install/handoff?nonce=wrong-nonce', mountRoutes(url))
+    expect(status).toBe(403)
+  })
+
+  it('hands this process\'s tokened URL to the matching nonce', async () => {
+    process.env.DSH_RESTART_HANDOFF = 'right-nonce'
+    const { status, body } = await get('/dsh-plugin-install/handoff?nonce=right-nonce', mountRoutes(url))
+    expect(status).toBe(200)
+    expect(body).toEqual({ ok: true, url: 'http://127.0.0.1:3080/?token=probe-token' })
+  })
+
+  it('503 when the host cannot resolve its tokened URL', async () => {
+    process.env.DSH_RESTART_HANDOFF = 'right-nonce'
+    const { status, body } = await get('/dsh-plugin-install/handoff?nonce=right-nonce', mountRoutes())
+    expect(status).toBe(503)
+    expect(body.error).toContain('authenticated URL')
+  })
+
+  it('405 on non-GET methods', async () => {
+    process.env.DSH_RESTART_HANDOFF = 'right-nonce'
+    const { status } = await post('/dsh-plugin-install/handoff', {}, mountRoutes(url))
+    expect(status).toBe(405)
   })
 })

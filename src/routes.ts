@@ -9,7 +9,7 @@ import { installPlugin, uninstallPlugin, progress, cancelActive, inDesktop } fro
 import { readInstalledBundles, readInstalledSpecs, readInstalledVersion, readPluginMeta, isLocalLink } from './profile.ts'
 import { readDisabledIds, readMountRows, setPluginMounted } from './mounts.ts'
 import { checkUpdates, fetchNpmLatest, isUpgrade, cachedUpdateCount } from './updates.ts'
-import { canSelfRestart, scheduleSelfRestart } from './restart.ts'
+import { BOOT_ID, canSelfRestart, scheduleSelfRestart, newHandoffNonce, nonceMatches, handoffWindowOpen } from './restart.ts'
 import { validateSpec } from './cli.ts'
 import type { InstalledPlugin, InstallerHost } from './types.ts'
 
@@ -17,6 +17,13 @@ import type { InstalledPlugin, InstallerHost } from './types.ts'
 export interface RouteConfig {
   profile: string
   profileDirPath: string
+  /**
+   * This process's tokened browser URL (`http://127.0.0.1:PORT/?token=…`),
+   * resolvable only while both the webServer port and the connection
+   * service are reachable; used by the restart handoff route. Absent in
+   * hosts that predate the dsh 0.1.2 auth layer.
+   */
+  tokenedUrl?: () => string | undefined
 }
 
 /** The package name of this plugin — the one mount the UI must not pause. */
@@ -60,6 +67,7 @@ export function mountInstallerRoutes(
         }
         sendJson(response, 200, {
           desktop: inDesktop(),
+          boot: BOOT_ID,
           active: progress.active,
           target: progress.target,
           startedAt: progress.startedAt,
@@ -360,12 +368,53 @@ export function mountInstallerRoutes(
           sendJson(response, 501, { error: 'this host has no re-runnable script entry; restart dsh yourself' })
           return
         }
-        sendJson(response, 200, { ok: true, restarting: true })
+        // dsh 0.1.2+ mints a fresh launch token per boot, so the successor
+        // cannot be entered with this tab's URL or cookie alone. The nonce
+        // travels to the page here and to the successor through the relay's
+        // environment; the successor's /handoff route trades it for ITS
+        // tokened URL, keeping the restarting tab usable across the swap.
+        const handoff = newHandoffNonce()
+        sendJson(response, 200, { ok: true, restarting: true, handoff })
         if (typeof response.on === 'function') {
-          response.on('finish', () => scheduleSelfRestart())
+          response.on('finish', () => scheduleSelfRestart(handoff))
         } else {
-          scheduleSelfRestart()
+          scheduleSelfRestart(handoff)
         }
+      },
+    }),
+
+    host.webServer.register({
+      kind: 'exact',
+      path: '/dsh-plugin-install/handoff',
+      handler: async (request: IncomingMessage, response: ServerResponse) => {
+        if (request.method !== 'GET') {
+          response.writeHead(405, { allow: 'GET' })
+          response.end()
+          return
+        }
+        // The nonce is the fence here, not sameOrigin: a same-origin GET may
+        // legally arrive without an Origin header, while anything that never
+        // held the restart response cannot name this nonce.
+        const nonce = new URL(request.url ?? '/', 'http://dsh.invalid').searchParams.get('nonce') ?? undefined
+        const expected = process.env.DSH_RESTART_HANDOFF
+        if (expected === undefined || expected === '') {
+          sendJson(response, 404, { error: 'no restart handoff pending' })
+          return
+        }
+        if (!handoffWindowOpen()) {
+          sendJson(response, 410, { error: 'the restart handoff window has closed' })
+          return
+        }
+        if (!nonceMatches(nonce, expected)) {
+          sendJson(response, 403, { error: 'restart handoff nonce mismatch' })
+          return
+        }
+        const url = config.tokenedUrl?.()
+        if (url === undefined) {
+          sendJson(response, 503, { error: 'this host cannot resolve its authenticated URL' })
+          return
+        }
+        sendJson(response, 200, { ok: true, url })
       },
     }),
   ]

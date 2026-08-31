@@ -11,7 +11,7 @@ import { spawn } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
-import { RELAY_PROGRAM } from './restart.ts'
+import { BOOT_AT, BOOT_ID, RELAY_PROGRAM, handoffWindowOpen, newHandoffNonce, nonceMatches } from './restart.ts'
 
 const root = mkdtempSync(join(tmpdir(), 'dsh-plugin-install-relay-'))
 afterAll(() => {
@@ -39,6 +39,23 @@ function startRelay(env: Record<string, string>): Promise<{ code: number | null;
 }
 
 describe('restart relay', () => {
+  it('boot identity and handoff helpers', () => {
+    // One stable id per process generation: the restarting tab detects the
+    // successor by watching this value change between polls.
+    expect(BOOT_ID).toMatch(/^[0-9a-f-]{36}$/)
+    expect(typeof BOOT_AT).toBe('number')
+    expect(handoffWindowOpen()).toBe(true)
+    expect(handoffWindowOpen(BOOT_AT + 120_000)).toBe(true)
+    expect(handoffWindowOpen(BOOT_AT + 120_001)).toBe(false)
+    const nonce = newHandoffNonce()
+    expect(nonce.length).toBeGreaterThanOrEqual(40)
+    expect(newHandoffNonce()).not.toBe(nonce)
+    expect(nonceMatches(nonce, nonce)).toBe(true)
+    expect(nonceMatches('another', nonce)).toBe(false)
+    expect(nonceMatches(undefined, nonce)).toBe(false)
+    expect(nonceMatches(nonce, undefined)).toBe(false)
+  })
+
   it('detached mode: exits at once and leaves the successor running', async () => {
     const file = join(root, 'detached.txt')
     const relay = await startRelay({
@@ -158,6 +175,21 @@ describe('restart relay', () => {
     expect(relay.code).toBe(0)
     await new Promise(resolve => { setTimeout(resolve, 2500) })
     expect(existsSync(file)).toBe(false)
+  }, 15_000)
+
+  it('passes the handoff nonce through to the successor (relay env inheritance)', async () => {
+    const file = join(root, 'handoff.txt')
+    const relay = await startRelay({
+      DSH_RESTART_ARGV: JSON.stringify([process.execPath, '-e', "require('node:fs').writeFileSync(process.env.SUCCESSOR_FILE, process.env.DSH_RESTART_HANDOFF || 'MISSING')"]),
+      DSH_RESTART_CWD: root,
+      DSH_RESTART_HANDOFF: 'nonce-on-the-wire',
+      SUCCESSOR_FILE: file,
+    })
+    expect(relay.code).toBe(0)
+    for (let i = 0; i < 40 && !existsSync(file); i++) {
+      await new Promise(resolve => { setTimeout(resolve, 100) })
+    }
+    expect(readFileSync(file, 'utf8')).toBe('nonce-on-the-wire')
   }, 15_000)
 
   it('waits for the old process to exit before launching the successor', async () => {
