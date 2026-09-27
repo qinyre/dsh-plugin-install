@@ -6,13 +6,8 @@
 
 import { useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
-import {
-  Button,
-  IconDownloadOutline16,
-  IconRefreshOutline14,
-  Modal,
-  StateDot,
-} from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, Modal, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconDownload, IconRefresh } from './icons.ts'
 import { setNavBadgeCount } from './navBadge.ts'
 import type { Translate } from './index.ts'
 
@@ -353,7 +348,7 @@ export function InstallTab(props: { t: Translate; injected: InstallTabInjected }
 
       <div className="dpi-installRow">
         <label className="dpi-field">
-          <IconDownloadOutline16 aria-hidden="true" />
+          <IconDownload aria-hidden="true" />
           <input
             placeholder={t('specPh')}
             value={spec}
@@ -434,7 +429,7 @@ export function InstallTab(props: { t: Translate; injected: InstallTabInjected }
             disabled={busy}
             onClick={() => setReload((value) => value + 1)}
           >
-            <IconRefreshOutline14 size={14} aria-hidden="true" />
+            <IconRefresh size={14} aria-hidden="true" />
           </button>
         </div>
       </div>
