@@ -1,53 +1,26 @@
 /** Minimal ambient types for the primitives the browser half uses, matching
  * @deepseek-ai/dsh-client-ui-primitives (provided by the host's frozen
- * platform module table; never bundled). Only members used here are
- * declared — keep in sync with the host package. */
+ * platform module table; never bundled). Members are reached through a
+ * structural table with plain-element fallbacks, so only the module shape
+ * matters here — a renamed primitive degrades instead of blanking the page
+ * (the 0.3.11 lesson). */
 
 declare module '@deepseek-ai/dsh-client-ui-primitives' {
-  import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactElement, ReactNode, SVGProps } from 'react'
+  import type { ReactElement, ReactNode } from 'react'
 
-  export type ButtonVariant = 'primary' | 'ghost' | 'outline' | 'toolbar'
   export function Button(props: {
-    variant?: ButtonVariant
+    variant?: 'primary' | 'ghost' | 'outline' | 'toolbar'
     size?: 'md' | 'sm'
-    icon?: ReactNode
+    className?: string | undefined
+    disabled?: boolean
+    title?: string | undefined
+    onClick?: () => void
+    children?: ReactNode
+  }): ReactElement | null
+
+  export function Tag(props: {
+    tone?: 'outline' | 'solid' | 'neutral' | 'quiet' | 'success' | 'info' | 'warning' | 'danger'
     className?: string | undefined
     children?: ReactNode
-  } & ButtonHTMLAttributes<HTMLButtonElement>): ReactElement
-
-  export function Input(props: {
-    icon?: ReactNode
-    className?: string
-  } & InputHTMLAttributes<HTMLInputElement>): ReactElement
-
-  /** Four-color state dot; 'ongoing' renders the running ring. */
-  export type StateDotState = 'done' | 'warning' | 'ongoing' | 'error'
-  export function StateDot(props: {
-    state: StateDotState
-    size?: number | undefined
-    className?: string | undefined
-  }): ReactElement
-
-  export function IconDownloadOutline16(props: {
-    className?: string | undefined
-    size?: number | undefined
-  } & SVGProps<SVGSVGElement>): ReactElement
-
-  export function IconRefreshOutline14(props: {
-    className?: string | undefined
-    size?: number | undefined
-  } & SVGProps<SVGSVGElement>): ReactElement
-
-  export function Modal(props: {
-    open: boolean
-    onClose: () => void
-    title: string
-    closeLabel?: string
-    description?: string
-    children?: ReactNode
-    footer?: ReactNode
-    className?: string
-    contentClassName?: string
-    headless?: boolean
   }): ReactElement | null
 }

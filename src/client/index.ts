@@ -1,17 +1,24 @@
-/** dsh-plugin-install client entry: contributes the “Install” tab into the
- * Web Settings → Plugins section, plus the update-count badge on the
- * section's nav row. The tab runs on the same web server as the host routes
- * (/dsh-plugin-install/*), so it calls them with plain fetch. */
+/** dsh-plugin-install client entry: the update layer on the Plugins page.
+ *
+ * Since dsh 0.2.0 the Plugins page itself owns install, removal, and mount
+ * management; this plugin no longer contributes a tab of its own. What it
+ * still adds is the one thing the page lacks — update awareness:
+ * - a green dot on a card's icon and an Update control beside its switch
+ *   (DOM layer — the page declares no per-row slot);
+ * - an update tag and Update/Restart control on a bundle's detail page
+ *   (the page's `plugins.detail.badge` / `plugins.detail.actions` slots);
+ * - the update-count pill on the 插件 nav row.
+ * All surfaces read one shared store fed by the installer's routes
+ * (/dsh-plugin-install/*), so they always agree. */
 
-import { createElement as h } from 'react'
-import { InstallTab, type InstallOutcome, type InstallStatus, type MountResponse, type UpdatesResponse } from './InstallTab.tsx'
+import { UpdateAction, UpdateBadge } from './detailSlots.tsx'
 import { installNavBadge, setNavBadgeCount } from './navBadge.ts'
+import { installRowLayer } from './rowLayer.ts'
+import { refresh, subscribe, updateCount } from './store.ts'
 import { zh, en } from './locales.ts'
 
 /** Locale dictionary namespace owned by this plugin. */
 export const NS = 'settings.pluginInstall'
-
-export type { InstallTabInjected, InstallStatus, InstallOutcome, MountResponse, PluginRow, UpdatesResponse } from './InstallTab.tsx'
 
 /** The `t` function bound by the locale service. */
 export interface Translate {
@@ -21,7 +28,7 @@ export interface Translate {
 /** Minimal structural subset of the slots service. */
 interface SlotsService {
   inject(slot: string, register: () => unknown): void
-  register(meta: Record<string, unknown>, component: () => unknown): unknown
+  register(meta: Record<string, unknown>, component: unknown): unknown
 }
 
 /** Minimal structural subset of the locale service. */
@@ -33,33 +40,8 @@ interface LocaleService {
 /** The client cordis context this plugin relies on (structural). */
 interface InstallClientContext {
   effect(callback: () => unknown, label?: string): void
-  on(event: string, callback: () => void): () => void
   locale: LocaleService
   slots: SlotsService
-}
-
-/** Same-origin fetch of the installer host routes. */
-async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, init)
-  // Error bodies are normally JSON but must not have to be (a proxy can emit
-  // an HTML error page); parse leniently so the status still reaches the UI.
-  let body: (T & { error?: string }) | undefined
-  try {
-    body = (await response.json()) as T & { error?: string }
-  } catch {
-    body = undefined
-  }
-  if (!response.ok) throw new Error(body?.error ?? `HTTP ${response.status}`)
-  return body as T
-}
-
-/** Pull the update listing (TTL-cached server-side) into the nav badge. */
-async function refreshBadge(): Promise<void> {
-  try {
-    const response = await fetchJson<UpdatesResponse>('/dsh-plugin-install/updates')
-    const pending = Object.values(response.updates).filter(status => status.updateAvailable).length
-    setNavBadgeCount(pending)
-  } catch { /* offline: the last count stands */ }
 }
 
 export const name = 'dsh-plugin-install'
@@ -70,94 +52,39 @@ export function apply(ctx: InstallClientContext): void {
 
   const t = ctx.locale.bind(NS)
 
-  // Badge layer + its own cadence: one fill at load, then every 10 minutes.
-  // The server TTL (30 min) bounds the real network traffic underneath.
+  // One store cadence: fill at load, then every 10 minutes. The server TTL
+  // (30 min) bounds the real network traffic underneath. Store changes drive
+  // the row painter; this effect additionally mirrors the count into the
+  // nav badge.
+  ctx.effect(() => installRowLayer(t), 'dsh-plugin-install: row layer')
   ctx.effect(() => installNavBadge(), 'dsh-plugin-install: nav badge')
+  ctx.effect(() => subscribe(() => { setNavBadgeCount(updateCount()) }), 'dsh-plugin-install: badge mirror')
   ctx.effect(() => {
-    void refreshBadge()
-    const timer = setInterval(() => { void refreshBadge() }, 10 * 60_000)
+    void refresh()
+    const timer = setInterval(() => { void refresh() }, 10 * 60_000)
     return () => clearInterval(timer)
-  }, 'dsh-plugin-install: badge refresh')
+  }, 'dsh-plugin-install: refresh cadence')
 
-  ctx.slots.inject('settings.plugins.tab', () => {
-    const injected = {
-      status: () => fetchJson<InstallStatus>('/dsh-plugin-install/status'),
-      install: async (spec: string): Promise<InstallOutcome> =>
-        fetchJson<InstallOutcome>('/dsh-plugin-install/install', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ spec }),
-        }),
-      checkUpdates: async (force = true): Promise<UpdatesResponse> =>
-        fetchJson<UpdatesResponse>(`/dsh-plugin-install/updates${force ? '?force=1' : ''}`),
-      update: async (name: string): Promise<InstallOutcome> =>
-        fetchJson<InstallOutcome>('/dsh-plugin-install/update', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ name }),
-        }),
-      uninstall: async (name: string): Promise<InstallOutcome> =>
-        fetchJson<InstallOutcome>('/dsh-plugin-install/uninstall', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ name }),
-        }),
-      mount: async (name: string, enabled: boolean): Promise<MountResponse> =>
-        fetchJson<MountResponse>('/dsh-plugin-install/mount', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ name, enabled }),
-        }),
-      cancel: async (): Promise<void> => {
-        await fetchJson('/dsh-plugin-install/cancel', { method: 'POST' })
-      },
-      restart: (): void => {
-        // Desktop only: hand the restart to the shell (supervised sidecar).
-        window.dshDesktop?.restartSidecar?.()
-      },
-      restartWeb: async (): Promise<void> => {
-        // Standalone: the host relaunches itself through a detached relay.
-        // dsh 0.1.2+ mints a fresh launch token per boot, so the tab cannot
-        // just reload — poll until a NEW process generation answers, ask it
-        // for its tokened URL, and navigate there. A missing/failed handoff
-        // falls back to a plain reload, which still works whenever this tab
-        // holds a valid session cookie (stable port, persisted secret).
-        const before = await fetchJson<{ boot?: string }>('/dsh-plugin-install/status')
-          .then(status => status.boot)
-          .catch(() => undefined)
-        const accepted = await fetchJson<{ handoff?: string }>('/dsh-plugin-install/restart', { method: 'POST' })
-        const deadline = Date.now() + 90_000
-        for (;;) {
-          await new Promise(resolve => { setTimeout(resolve, 1000) })
-          if (Date.now() > deadline) throw new Error('restart did not come back within 90s')
-          try {
-            const status = await fetchJson<{ boot?: string }>('/dsh-plugin-install/status')
-            if (status.boot !== undefined && status.boot !== before) break
-          } catch {
-            /* still down — or the old generation is still disposing */
-          }
-        }
-        if (accepted.handoff !== undefined) {
-          try {
-            const handed = await fetchJson<{ url: string }>(`/dsh-plugin-install/handoff?nonce=${encodeURIComponent(accepted.handoff)}`)
-            window.location.replace(handed.url)
-            return
-          } catch {
-            /* no handoff arranged (or it closed): reload instead */
-          }
-        }
-        window.location.reload()
-      },
-      desktop: window.dshDesktop !== undefined,
-    }
-
-    return ctx.slots.register({
-      name: 'settings.plugins.tab',
-      id: 'install',
+  // Detail-page contributions on the official Plugins page. The page renders
+  // the entries with the open page's subject (and the locale seat for the
+  // declared namespace), so the components register as-is. On hosts without
+  // these slots (0.1.x) the entries simply never render.
+  ctx.slots.inject('plugins.detail.badge', () => {
+    ctx.slots.register({
+      name: 'plugins.detail.badge',
+      id: 'update-badge',
       order: 20,
-      label: () => t('tab'),
+      label: () => t('updateAvailable'),
       locale: NS,
-      inject: () => injected,
-    }, () => h(InstallTab, { t, injected }))
+    }, UpdateBadge)
+  })
+  ctx.slots.inject('plugins.detail.actions', () => {
+    ctx.slots.register({
+      name: 'plugins.detail.actions',
+      id: 'update-action',
+      order: 20,
+      label: () => t('updateBtn'),
+      locale: NS,
+    }, UpdateAction)
   })
 }
