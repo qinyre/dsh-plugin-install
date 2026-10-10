@@ -228,6 +228,15 @@ describe('setPluginMounted / stripPluginRows', () => {
     expect([...readDisabledIds(root, home)]).toEqual([])
   })
 
+  it('manual toggles still enable or disable every row of a partially paused plugin', () => {
+    const rows = { ids: ['row-a', 'row-b'], toggleable: true }
+    writeManagedBlock(join(root, 'cordis.patch.yml'), ['row-b', 'other-plugin'])
+    setPluginMounted(root, rows, true)
+    expect([...readDisabledIds(root, home)]).toEqual(['other-plugin'])
+    setPluginMounted(root, rows, false)
+    expect([...readDisabledIds(root, home)].sort()).toEqual(['other-plugin', 'row-a', 'row-b'])
+  })
+
   it('mounts over a foreign manager\'s pause rows ({ id, name, disabled })', () => {
     // The linxin666 plugin-manager pauses with a `name` key; before 0.3.6
     // resuming only stripped the exact two-key shape, so the mount click was
