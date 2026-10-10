@@ -5,10 +5,10 @@ import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { runPlugin, progress, cancelActive, inDesktop } from './cli.ts'
 import { readInstalledBundles, readInstalledVersion } from './profile.ts'
-import { parseSimplePatch, hotMount, hotUnmount, listHotMounts, cleanHotDir } from './hot.ts'
+import { parseSimplePatch, hotMount, hotUnmount, listHotMounts, cleanHotDir, hotReloadUpdate } from './hot.ts'
 import { readMountRows, stripPluginRows } from './mounts.ts'
 import { invalidateUpdates } from './updates.ts'
-import type { InstallerHost } from './types.ts'
+import { SELF_NAME, type InstallerHost } from './types.ts'
 
 /** Outcome of one install/uninstall, serialized to the browser. */
 export interface InstallOutcome {
@@ -27,6 +27,8 @@ export interface InstallOutcome {
   /** Registry version the add was expected to land on (update path); the UI
    * warns when it differs from resolvedVersion instead of trusting ok. */
   expectedVersion?: string
+  /** Why an update could not be hot-reloaded and still wants a restart. */
+  hotNote?: string
   stdout: string
   stderr: string
   installed: string[]
@@ -162,10 +164,24 @@ export async function installPlugin(
   const ok = result.exitCode === 0 && !result.timedOut && !result.cancelled
   if (ok) invalidateUpdates()
   let hot = false
+  let hotNote: string | undefined
   if (ok) hot = await tryHotMount(host, profileDirPath, before)
+  // An update of a running plugin can go live without a restart: pause and
+  // resume its rows so the watched profile layer recomposes them — the
+  // recompose resolves the pnpm-swapped package afresh and imports the new
+  // code. Never for the installer itself (the reload would tear down the
+  // fiber serving this very request).
+  if (ok && target?.name !== undefined && target.name !== SELF_NAME && before.has(target.name)) {
+    const reloaded = await hotReloadUpdate(host, profileDirPath, target.name)
+    if (reloaded !== null) {
+      hot = reloaded.hot
+      hotNote = reloaded.note
+    }
+  }
   return {
     ok,
     hot,
+    hotNote,
     cancelled: result.cancelled || undefined,
     exitCode: result.exitCode,
     timedOut: result.timedOut,

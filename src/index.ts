@@ -6,7 +6,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { mountInstallerRoutes } from './routes.ts'
 import { argvProfile, profileDir } from './profile.ts'
 import { checkUpdates } from './updates.ts'
-import type { InstallerHost } from './types.ts'
+import type { InstallerHost, LoaderEntryView } from './types.ts'
 import type { WebServerService } from './types.ts'
 
 export const name = 'dsh-plugin-install'
@@ -17,9 +17,15 @@ export interface Config {
   profile?: string
 }
 
-/** Structural host surface (the webServer service + dynamic plugin mounting). */
+/** Structural host surface: the webServer service, dynamic plugin mounting,
+ * and the loader entries hot-reload polling watches. */
 function asInstallerHost(ctx: Context & { webServer: WebServerService }): InstallerHost {
-  return ctx as unknown as InstallerHost
+  const shaped = ctx as unknown as InstallerHost & { loader?: { entries?: () => unknown[] } }
+  return {
+    webServer: shaped.webServer,
+    plugin: (plugin, config) => shaped.plugin(plugin, config),
+    loaderEntries: () => (shaped.loader?.entries?.() ?? []) as readonly LoaderEntryView[],
+  }
 }
 
 /** Background cadence; the default matches the updates TTL so each tick re-checks. */

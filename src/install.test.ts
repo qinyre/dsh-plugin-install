@@ -29,7 +29,7 @@ afterAll(() => {
   }
 })
 
-const host = { webServer: { register: () => () => undefined }, plugin: () => ({ await: () => Promise.resolve(undefined), dispose: () => undefined }) } as Parameters<typeof installPlugin>[0]
+const host = { webServer: { register: () => () => undefined }, plugin: () => ({ await: () => Promise.resolve(undefined), dispose: () => undefined }), loaderEntries: () => [] } as Parameters<typeof installPlugin>[0]
 
 const staleFail: InstallResult = {
   exitCode: 1,

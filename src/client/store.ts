@@ -67,8 +67,10 @@ export async function refresh(force = false): Promise<void> {
 
 /**
  * Update one package, then re-read the listing. Success marks the package
- * "updated" — its button turns into the restart control until the restart
- * lands. Errors surface through the op state and clear themselves.
+ * "updated" — its button turns into the restart control — unless the host
+ * reports the update already went live (hot reload); then the pending
+ * marker is simply dropped. Errors surface through the op state and clear
+ * themselves.
  */
 export async function updatePlugin(name: string): Promise<void> {
   if (state.ops[name] !== undefined) return
@@ -79,10 +81,13 @@ export async function updatePlugin(name: string): Promise<void> {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ name }),
     })
-    const body = (await response.json().catch(() => ({}))) as { ok?: boolean; error?: string }
+    const body = (await response.json().catch(() => ({}))) as { ok?: boolean; hot?: boolean; hotNote?: string; error?: string }
     if (response.ok && body.ok === true) {
       await refresh(false)
-      patch({ ops: { ...snapshot().ops, [name]: 'updated' } })
+      const ops = { ...snapshot().ops }
+      if (body.hot === true) delete ops[name]
+      else ops[name] = 'updated'
+      patch({ ops })
     } else {
       fail(name, body.error ?? `HTTP ${response.status}`)
     }

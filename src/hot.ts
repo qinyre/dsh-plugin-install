@@ -10,6 +10,8 @@
 
 import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { readMountRows, setPluginMounted } from './mounts.ts'
+import type { InstallerHost } from './types.ts'
 
 interface HotRow {
   id: string
@@ -136,4 +138,88 @@ export function listHotMounts(): string[] {
 /** Unmount a hot mount by package name. */
 export async function hotUnmount(packageName: string): Promise<boolean> {
   return liveMounts.delete(packageName)
+}
+
+/** How long the unload and re-activation legs of a hot reload may each take. */
+const UNLOAD_TIMEOUT_MS = 10_000
+const LOAD_TIMEOUT_MS = 20_000
+const POLL_INTERVAL_MS = 250
+
+/** Tunables for tests; production uses the defaults. */
+export interface HotReloadTimeouts {
+  unloadTimeoutMs?: number
+  loadTimeoutMs?: number
+}
+
+export interface HotReloadResult {
+  /** True when the recomposed fibers run the updated code. */
+  hot: boolean
+  /** Why a false result is still restart-worthy, when one applies. */
+  note?: string
+}
+
+/** Number of the package's row entries whose root fiber is live. */
+function liveRowCount(host: InstallerHost, ids: readonly string[]): number {
+  let live = 0
+  for (const entry of host.loaderEntries()) {
+    if (entry?.options === undefined || entry.fiber === undefined || entry.fiber === null) continue
+    if (ids.includes(entry.options.id ?? '')) live += 1
+  }
+  return live
+}
+
+async function waitForRowCount(
+  host: InstallerHost,
+  ids: readonly string[],
+  predicate: (count: number) => boolean,
+  timeoutMs: number,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    if (predicate(liveRowCount(host, ids))) return true
+    if (Date.now() >= deadline) return false
+    await new Promise(resolve => { setTimeout(resolve, POLL_INTERVAL_MS) })
+  }
+}
+
+/**
+ * Hot-reload one updated plugin: pause its rows and resume them, so the
+ * watched profile layer recomposes the entries. The recompose resolves the
+ * package afresh — after a pnpm update the junction points at the new store
+ * directory, so resolution lands on a URL the loader has never cached and
+ * the updated code imports as the replacement generation. Restoration
+ * restores the rows either way; a failed leg degrades to restart semantics.
+ *
+ * Returns null when there is nothing to hot-reload: the plugin is not
+ * toggleable or nothing of it is currently running.
+ */
+export async function hotReloadUpdate(
+  host: InstallerHost,
+  profileDirPath: string,
+  name: string,
+  timeouts: HotReloadTimeouts = {},
+): Promise<HotReloadResult | null> {
+  const rows = readMountRows(profileDirPath, name)
+  if (!rows.toggleable) return null
+  const liveBefore = liveRowCount(host, rows.ids)
+  if (liveBefore === 0) return null
+  setPluginMounted(profileDirPath, rows, false)
+  const unloaded = await waitForRowCount(
+    host, rows.ids, count => count === 0,
+    timeouts.unloadTimeoutMs ?? UNLOAD_TIMEOUT_MS,
+  )
+  if (!unloaded) {
+    setPluginMounted(profileDirPath, rows, true)
+    await waitForRowCount(host, rows.ids, count => count >= liveBefore, timeouts.loadTimeoutMs ?? LOAD_TIMEOUT_MS)
+    return { hot: false, note: 'the previous generation did not unload in time; restart to activate the update' }
+  }
+  setPluginMounted(profileDirPath, rows, true)
+  const reloaded = await waitForRowCount(
+    host, rows.ids, count => count >= liveBefore,
+    timeouts.loadTimeoutMs ?? LOAD_TIMEOUT_MS,
+  )
+  if (!reloaded) {
+    return { hot: false, note: 'the updated plugin did not finish activating in time; restart to retry' }
+  }
+  return { hot: true }
 }

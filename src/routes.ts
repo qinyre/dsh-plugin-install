@@ -11,7 +11,7 @@ import { readDisabledIds, readMountRows, setPluginMounted } from './mounts.ts'
 import { checkUpdates, fetchNpmLatest, isUpgrade, cachedUpdateCount } from './updates.ts'
 import { BOOT_ID, canSelfRestart, scheduleSelfRestart, newHandoffNonce, nonceMatches, handoffWindowOpen } from './restart.ts'
 import { validateSpec } from './cli.ts'
-import type { InstalledPlugin, InstallerHost } from './types.ts'
+import { SELF_NAME, type InstalledPlugin, type InstallerHost } from './types.ts'
 
 /** Host-context builder for testability: real code wires host.webServer. */
 export interface RouteConfig {
@@ -25,9 +25,6 @@ export interface RouteConfig {
    */
   tokenedUrl?: () => string | undefined
 }
-
-/** The package name of this plugin — the one mount the UI must not pause. */
-const SELF_NAME = 'dsh-plugin-install'
 
 /** Card rows for every installed plugin: manifest metadata + mount state. */
 export function readPluginRows(profileDirPath: string): InstalledPlugin[] {

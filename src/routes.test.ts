@@ -47,6 +47,7 @@ function mountRoutes(tokenedUrl?: () => string | undefined): Map<string, (reques
   const host: InstallerHost = {
     webServer,
     plugin: () => ({ await: () => Promise.resolve(undefined), dispose: () => undefined }),
+    loaderEntries: () => [],
   }
   mountInstallerRoutes(host, { profile: 'web', profileDirPath: root, ...(tokenedUrl === undefined ? {} : { tokenedUrl }) })
   return routes

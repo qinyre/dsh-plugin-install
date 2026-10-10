@@ -59,8 +59,20 @@ export interface WebServerService {
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
+/** This package's own name — the installer can never manage itself. */
+export const SELF_NAME = 'dsh-plugin-install'
+
+/** One loader entry as hot-reload polling sees it (structural subset). */
+export interface LoaderEntryView {
+  options?: { id?: string; name?: string }
+  /** Live root fiber while the entry's plugin is running. */
+  fiber?: unknown
+}
+
 /** The host surface the installer needs: routes + dynamic plugin mounting. */
 export interface InstallerHost {
   webServer: WebServerService
   plugin(plugin: unknown, config: unknown): { await(): Promise<unknown>; dispose(): Promise<unknown> | void }
+  /** Loader entries for hot-reload polling; empty on hosts without access. */
+  loaderEntries(): readonly LoaderEntryView[]
 }
