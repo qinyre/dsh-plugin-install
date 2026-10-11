@@ -7,6 +7,7 @@ import { runPlugin, progress, cancelActive, inDesktop } from './cli.ts'
 import { readInstalledBundles, readInstalledVersion } from './profile.ts'
 import { parseSimplePatch, hotMount, hotUnmount, listHotMounts, cleanHotDir, hotReloadUpdate } from './hot.ts'
 import { readMountRows, stripPluginRows } from './mounts.ts'
+import { appendCooldownExclusion } from './workspace.ts'
 import { invalidateUpdates } from './updates.ts'
 import { SELF_NAME, type InstallerHost } from './types.ts'
 
@@ -82,7 +83,9 @@ async function runOpWithBypass(profile: string, args: string[]) {
 
 /** Run one add, retrying once after a pause when the failure is the
  * post-publish propagation race. The retry is invisible except through the
- * live progress line. */
+ * live progress line. Returns whether pnpm accepted the cooldown bypass —
+ * a bypassed add lands an in-window entry in the lockfile that every
+ * cooldown-respecting tool then trips over until it ages out. */
 async function runAddWithRetry(profile: string, spec: string) {
   const { result: first, bypass } = await runOpWithBypass(profile, ['add', spec])
   let result = first
@@ -92,7 +95,7 @@ async function runAddWithRetry(profile: string, spec: string) {
     await delay(retryDelayMs())
     result = await runPlugin(profile, bypass ? ['add', NO_COOLDOWN, spec] : ['add', spec])
   }
-  return result
+  return { result, bypass }
 }
 
 /**
@@ -160,12 +163,22 @@ export async function installPlugin(
 ): Promise<InstallOutcome> {
   cleanHotDir(profileDirPath)
   const before = new Set(readInstalledBundles(profileDirPath))
-  const result = await runAddWithRetry(profile, spec)
+  const { result, bypass } = await runAddWithRetry(profile, spec)
   const ok = result.exitCode === 0 && !result.timedOut && !result.cancelled
   if (ok) invalidateUpdates()
   let hot = false
   let hotNote: string | undefined
   if (ok) hot = await tryHotMount(host, profileDirPath, before)
+  // A bypassed add lands an in-window lockfile entry without the exclusion
+  // pnpm writes for explicit-version installs — every cooldown-respecting
+  // tool (the official manager's installs and removals) would trip over it
+  // until the entry ages out. Write the same exclusion to heal the profile.
+  const resolvedVersion = target === undefined ? undefined : readInstalledVersion(profileDirPath, target.name)
+  if (ok && bypass && target?.name !== undefined && resolvedVersion !== null && resolvedVersion !== undefined) {
+    try {
+      appendCooldownExclusion(profileDirPath, target.name, resolvedVersion)
+    } catch { /* best effort — the audit self-heals in 24h regardless */ }
+  }
   // An update of a running plugin can go live without a restart: pause and
   // resume its rows so the watched profile layer recomposes them — the
   // recompose resolves the pnpm-swapped package afresh and imports the new
@@ -187,7 +200,7 @@ export async function installPlugin(
     timedOut: result.timedOut,
     error: commandErrorText(result),
     staleRegistry: (!ok && smellsLikeStaleRegistry(result.stderr)) || undefined,
-    resolvedVersion: target === undefined ? undefined : readInstalledVersion(profileDirPath, target.name),
+    resolvedVersion,
     expectedVersion: target?.expectedVersion,
     stdout: result.stdout.slice(-2000),
     stderr: result.stderr.slice(-2000),
