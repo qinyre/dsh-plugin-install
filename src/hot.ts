@@ -10,7 +10,7 @@
 
 import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { readMountRows, setPluginMounted } from './mounts.ts'
+import { readDisabledIds, readMountRows, setPluginMounted } from './mounts.ts'
 import type { InstallerHost } from './types.ts'
 
 interface HotRow {
@@ -183,7 +183,7 @@ async function waitForRowCount(
 }
 
 /**
- * Hot-reload one updated plugin: pause its rows and resume them, so the
+ * Hot-reload one updated plugin: pause its enabled rows and resume them, so the
  * watched profile layer recomposes the entries. The recompose resolves the
  * package afresh — after a pnpm update the junction points at the new store
  * directory, so resolution lands on a URL the loader has never cached and
@@ -201,21 +201,30 @@ export async function hotReloadUpdate(
 ): Promise<HotReloadResult | null> {
   const rows = readMountRows(profileDirPath, name)
   if (!rows.toggleable) return null
-  const liveBefore = liveRowCount(host, rows.ids)
+  // Manual mounting intentionally clears every targeted disable directive.
+  // Only target rows enabled before the reload, preserving per-row pauses
+  // (including home-layer pauses and foreign managers' configuration).
+  const disabledBefore = readDisabledIds(profileDirPath)
+  const reloadRows = { ...rows, ids: rows.ids.filter(id => !disabledBefore.has(id)) }
+  const liveBefore = liveRowCount(host, reloadRows.ids)
   if (liveBefore === 0) return null
-  setPluginMounted(profileDirPath, rows, false)
-  const unloaded = await waitForRowCount(
-    host, rows.ids, count => count === 0,
-    timeouts.unloadTimeoutMs ?? UNLOAD_TIMEOUT_MS,
-  )
+  setPluginMounted(profileDirPath, reloadRows, false)
+  let unloaded: boolean
+  try {
+    unloaded = await waitForRowCount(
+      host, reloadRows.ids, count => count === 0,
+      timeouts.unloadTimeoutMs ?? UNLOAD_TIMEOUT_MS,
+    )
+  } finally {
+    // Restore the same enabled set on success, timeout, or polling failure.
+    setPluginMounted(profileDirPath, reloadRows, true)
+  }
   if (!unloaded) {
-    setPluginMounted(profileDirPath, rows, true)
-    await waitForRowCount(host, rows.ids, count => count >= liveBefore, timeouts.loadTimeoutMs ?? LOAD_TIMEOUT_MS)
+    await waitForRowCount(host, reloadRows.ids, count => count >= liveBefore, timeouts.loadTimeoutMs ?? LOAD_TIMEOUT_MS)
     return { hot: false, note: 'the previous generation did not unload in time; restart to activate the update' }
   }
-  setPluginMounted(profileDirPath, rows, true)
   const reloaded = await waitForRowCount(
-    host, rows.ids, count => count >= liveBefore,
+    host, reloadRows.ids, count => count >= liveBefore,
     timeouts.loadTimeoutMs ?? LOAD_TIMEOUT_MS,
   )
   if (!reloaded) {
