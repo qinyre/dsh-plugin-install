@@ -64,7 +64,12 @@ function controlFor(name: string): { label: string; disabled: boolean; title: st
   const op: OpState | undefined = state.ops[name]
   if (status?.updateAvailable === true) {
     const error = op !== undefined && typeof op === 'object' ? op.error : undefined
-    return { label: t('updateBtn'), disabled: op === 'updating', title: error !== undefined ? `${t('updateFailed')}: ${error}` : '', kind: 'update' }
+    return {
+      label: error !== undefined ? t('updateFailed') : t('updateBtn'),
+      disabled: op === 'updating',
+      title: error !== undefined ? `${t('updateFailed')}: ${error}` : '',
+      kind: 'update',
+    }
   }
   if (op === 'updating') return { label: t('updating'), disabled: true, title: '', kind: 'update' }
   if (op === 'updated') return { label: t('restartShort'), disabled: false, title: '', kind: 'restart' }

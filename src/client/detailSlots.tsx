@@ -77,7 +77,7 @@ export function UpdateAction({ subject, t }: { subject: DetailSubject; t: Transl
   if (!available && op !== 'updated') return null
   const updating = available && op === 'updating'
   const error = op !== undefined && typeof op === 'object' ? op.error : undefined
-  const label = available ? (updating ? t('updating') : t('updateBtn')) : t('restartShort')
+  const label = available ? (updating ? t('updating') : error !== undefined ? t('updateFailed') : t('updateBtn')) : t('restartShort')
   const Button = table.Button
   if (typeof Button !== 'function') {
     return h('button', {

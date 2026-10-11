@@ -97,14 +97,9 @@ export async function updatePlugin(name: string): Promise<void> {
 }
 
 function fail(name: string, message: string): void {
+  // The failed op persists until the next attempt on the same package, so
+  // the failure is visible (row button reads 更新失败, title carries why).
   patch({ ops: { ...snapshot().ops, [name]: { error: message } } })
-  setTimeout(() => {
-    const ops = { ...snapshot().ops }
-    if (ops[name] !== undefined && typeof ops[name] === 'object' && (ops[name] as { error: string }).error === message) {
-      delete ops[name]
-      patch({ ops })
-    }
-  }, 6000)
 }
 
 /** Restart the host so updated packages activate: the desktop shell

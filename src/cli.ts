@@ -4,9 +4,10 @@
  * CLI's own (its `plugin` forwarder spawns pnpm with shell:true on win32).
  */
 
+import { existsSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
-import { dirname, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { InstallProgress, InstallResult, SPEC_RE, MAX_SPEC_LENGTH } from './types.ts'
 
 /** True when this host runs inside DSH Desktop's sidecar (the client env). */
@@ -14,16 +15,62 @@ export function inDesktop(): boolean {
   return process.env.DSH_DESKTOP === '1'
 }
 
+/** How the dsh CLI should be invoked for plugin commands. */
+export interface DshArgv {
+  file: string
+  args: string[]
+  cwd: string | undefined
+  viaShell: boolean
+  /** Extra environment (Electron-as-Node when reusing the host executable). */
+  env?: NodeJS.ProcessEnv
+}
+
+export interface DshArgvOptions {
+  argv?: readonly string[]
+  execPath?: string
+  execArgv?: readonly string[]
+  exists?: (path: string) => boolean
+}
+
 /**
  * The dsh binary invocation that launched this host, so plugin commands work
- * whether dsh runs from a global bin, a local install, or repo source.
+ * whether dsh runs from a global bin, a local install, repo source — or the
+ * desktop host. The desktop launch carries Electron switches before the host
+ * script and never names the CLI, so the CLI entry is found relative to the
+ * running runtime (a dsh install's own node_modules) and executed through
+ * Electron's executable as plain Node; the GUI PATH never enters the picture.
+ * A bare `dsh` on the shell stays the last resort.
  */
-export function dshArgv(): { file: string; args: string[]; cwd: string | undefined; viaShell: boolean } {
-  const entry = process.argv[1]
+export function dshArgv(options: DshArgvOptions = {}): DshArgv {
+  const argv = options.argv ?? process.argv
+  const execPath = options.execPath ?? process.execPath
+  const execArgv = options.execArgv ?? process.execArgv
+  const exists = options.exists ?? existsSync
+
+  const entry = argv[1]
   if (entry !== undefined && /[\\/](?:bin\.(?:js|ts)|dsh)$/.test(entry)) {
     const abs = resolve(entry)
-    return { file: process.execPath, args: [...process.execArgv, abs], cwd: dirname(abs), viaShell: false }
+    return { file: execPath, args: [...execArgv, abs], cwd: dirname(abs), viaShell: false }
   }
+
+  for (const candidate of argv.slice(1)) {
+    if (typeof candidate !== 'string' || !/\.[cm]?js$/.test(candidate) || !exists(candidate)) continue
+    let dir = dirname(resolve(candidate))
+    for (let depth = 0; depth < 6 && dir !== dirname(dir); depth++) {
+      const cliEntry = join(dir, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
+      if (exists(cliEntry)) {
+        return {
+          file: execPath,
+          args: [...execArgv, cliEntry],
+          cwd: dirname(cliEntry),
+          viaShell: false,
+          env: { ELECTRON_RUN_AS_NODE: '1' },
+        }
+      }
+      dir = dirname(dir)
+    }
+  }
+
   // Bare `dsh` is a .cmd shim on Windows; only a shell can start it.
   return { file: 'dsh', args: [], cwd: undefined, viaShell: process.platform === 'win32' }
 }
@@ -99,10 +146,10 @@ export function runPlugin(profile: string, pluginArgs: string[], opts: { env?: N
   progress.lastError = null
   progress.cancelling = false
 
-  const { file, args, cwd, viaShell } = dshArgv()
+  const { file, args, cwd, viaShell, env: spawnEnv } = dshArgv()
   const child = spawn(file, [...args, 'plugin', '--profile', profile, ...pluginArgs], {
     cwd: cwd ?? process.cwd(),
-    env: opts.env ?? process.env,
+    env: spawnEnv === undefined ? opts.env ?? process.env : { ...(opts.env ?? process.env), ...spawnEnv },
     stdio: ['ignore', 'pipe', 'pipe'],
     shell: viaShell,
     // The chain below re-runs cmd shims (`dsh`, then pnpm via the CLI's

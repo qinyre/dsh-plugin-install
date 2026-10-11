@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { validateSpec } from './cli.ts'
+import { resolve } from 'node:path'
+import { dshArgv, validateSpec } from './cli.ts'
 
 describe('validateSpec（防注入：任意下载的入口）', () => {
   it('accepts bare package names', () => {
@@ -39,5 +40,42 @@ describe('validateSpec（防注入：任意下载的入口）', () => {
 
   it('rejects whitespace inside the spec', () => {
     expect(validateSpec('dsh context')).not.toBeNull()
+  })
+})
+describe('dshArgv（CLI 调用方式解析）', () => {
+  it('reuses the CLI entry when argv names it', () => {
+    const entry = 'D:/Program/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js'
+    const result = dshArgv({
+      argv: ['C:/nvm4w/nodejs/node.exe', entry],
+      execPath: 'C:/nvm4w/nodejs/node.exe',
+      execArgv: [],
+    })
+    expect(result.viaShell).toBe(false)
+    expect(result.args).toEqual([resolve(entry)])
+    expect(result.env).toBeUndefined()
+  })
+
+  it('resolves the bundled CLI from a desktop-style launch (Electron switches first)', () => {
+    const bin = 'D:/App/resources/app.asar/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js'
+    const host = 'D:/App/resources/app.asar/dsh/node_modules/@deepseek-ai/dsh-desktop-host/lib/index.js'
+    const exists = (p: string): boolean => {
+      const normalized = p.replace(/\\/g, '/')
+      return normalized === bin || normalized === host
+    }
+    const result = dshArgv({
+      argv: ['D:/App/DeepSeek Harness.exe', '--expose-internals', host, 'D:/ws'],
+      execPath: 'D:/App/DeepSeek Harness.exe',
+      execArgv: [],
+      exists,
+    })
+    expect(result.file).toBe('D:/App/DeepSeek Harness.exe')
+    expect(result.args).toEqual([resolve(bin)])
+    expect(result.env).toEqual({ ELECTRON_RUN_AS_NODE: '1' })
+    expect(result.viaShell).toBe(false)
+  })
+
+  it('falls back to bare dsh via shell when no CLI layout is found', () => {
+    const result = dshArgv({ argv: ['node.exe', 'server.js'], execPath: 'node.exe', execArgv: [], exists: () => false })
+    expect(result).toMatchObject({ file: 'dsh', viaShell: true })
   })
 })
