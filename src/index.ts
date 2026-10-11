@@ -3,8 +3,9 @@
  * a schedule so the badge and /status can answer without a registry hit. */
 
 import type { Context } from '@deepseek-ai/cordis'
+import { fileURLToPath } from 'node:url'
 import { mountInstallerRoutes } from './routes.ts'
-import { argvProfile, profileDir } from './profile.ts'
+import { activeProfileContext, argvProfile, profileDir } from './profile.ts'
 import { checkUpdates } from './updates.ts'
 import type { InstallerHost, LoaderEntryView } from './types.ts'
 import type { WebServerService } from './types.ts'
@@ -46,8 +47,18 @@ function scheduleUpdateChecks(profileDirPath: string): () => void {
 }
 
 export function apply(ctx: Context, config?: Config): void {
-  const profile = config?.profile ?? argvProfile() ?? 'web'
-  const dirPath = profileDir(profile)
+  // Where does the installer address installs, updates, and mount rows? An
+  // explicit cordis config wins. Otherwise the module's own location names
+  // the active profile — the desktop host never puts `--profile` on argv, so
+  // the argv fallback would silently pick `web` there and read the wrong
+  // profile's packages (the missing desktop update dots). The argv fallback
+  // remains for development layouts a `file:` install places outside any
+  // profile.
+  const active = activeProfileContext(fileURLToPath(import.meta.url))
+  const profile = config?.profile ?? active?.profile ?? argvProfile() ?? 'web'
+  const dirPath = config?.profile !== undefined || active === undefined
+    ? profileDir(profile)
+    : active.profileDirPath
   ctx.inject(['webServer'], (hostCtx: Context) => {
     const host = asInstallerHost(hostCtx as Context & { webServer: WebServerService })
     // dsh 0.1.2+ gives every boot a fresh launch token; the restart handoff
