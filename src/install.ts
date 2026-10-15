@@ -5,7 +5,7 @@ import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { runPlugin, progress, cancelActive, inDesktop } from './cli.ts'
 import { readInstalledBundles, readInstalledVersion } from './profile.ts'
-import { parseSimplePatch, hotMount, hotUnmount, listHotMounts, cleanHotDir, hotReloadUpdate } from './hot.ts'
+import { parseSimplePatch, hotMount, hotUnmount, listHotMounts, cleanHotDir, pauseForSwap, type SwapLease } from './hot.ts'
 import { readMountRows, stripPluginRows } from './mounts.ts'
 import { appendCooldownExclusion } from './workspace.ts'
 import { invalidateUpdates } from './updates.ts'
@@ -163,6 +163,30 @@ export async function installPlugin(
 ): Promise<InstallOutcome> {
   cleanHotDir(profileDirPath)
   const before = new Set(readInstalledBundles(profileDirPath))
+  // An update of a running plugin swaps its package under a live instance.
+  // Pause the running generation FIRST: its fs.watch handles (skill roots,
+  // vendored directories) make Windows refuse the mid-swap deletion and pnpm
+  // dies with the package gutted. Pausing disposes the fibers — closing the
+  // watchers — before pnpm touches anything. Never for the installer itself
+  // (the pause would tear down the fiber serving this very request).
+  const isUpdate = target?.name !== undefined && target.name !== SELF_NAME && before.has(target.name)
+  let paused: { lease?: SwapLease; blocked?: string } | null = null
+  if (isUpdate) paused = await pauseForSwap(host, profileDirPath, target!.name)
+  if (paused?.blocked !== undefined) {
+    return {
+      ok: false,
+      hot: false,
+      exitCode: 1,
+      timedOut: false,
+      error: `${paused.blocked}; restart dsh, then update again`,
+      resolvedVersion: readInstalledVersion(profileDirPath, target!.name),
+      expectedVersion: target?.expectedVersion,
+      stdout: '',
+      stderr: paused.blocked,
+      installed: readInstalledBundles(profileDirPath),
+      live: listHotMounts(),
+    }
+  }
   const { result, bypass } = await runAddWithRetry(profile, spec)
   const ok = result.exitCode === 0 && !result.timedOut && !result.cancelled
   if (ok) invalidateUpdates()
@@ -179,16 +203,16 @@ export async function installPlugin(
       appendCooldownExclusion(profileDirPath, target.name, resolvedVersion)
     } catch { /* best effort — the audit self-heals in 24h regardless */ }
   }
-  // An update of a running plugin can go live without a restart: pause and
-  // resume its rows so the watched profile layer recomposes them — the
-  // recompose resolves the pnpm-swapped package afresh and imports the new
-  // code. Never for the installer itself (the reload would tear down the
-  // fiber serving this very request).
-  if (ok && target?.name !== undefined && target.name !== SELF_NAME && before.has(target.name)) {
-    const reloaded = await hotReloadUpdate(host, profileDirPath, target.name)
-    if (reloaded !== null) {
+  // The paused generation resumes here: a successful swap recomposes the
+  // rows against the new package (fresh resolution, new code live, no
+  // restart); a failed swap restores the old generation as-is.
+  if (isUpdate && paused?.lease !== undefined) {
+    if (ok) {
+      const reloaded = await paused.lease.resume()
       hot = reloaded.hot
       hotNote = reloaded.note
+    } else {
+      paused.lease.restore()
     }
   }
   return {

@@ -158,6 +158,14 @@ export interface HotReloadResult {
   note?: string
 }
 
+/** A plugin paused for an on-disk swap: `resume` brings the new code live. */
+export interface SwapLease {
+  /** Re-enable the paused rows and wait for the recomposed fibers. */
+  resume(timeouts?: HotReloadTimeouts): Promise<HotReloadResult>
+  /** Re-enable the paused rows without waiting (the swap failed). */
+  restore(): void
+}
+
 /** Number of the package's row entries whose root fiber is live. */
 function liveRowCount(host: InstallerHost, ids: readonly string[]): number {
   let live = 0
@@ -183,12 +191,75 @@ async function waitForRowCount(
 }
 
 /**
- * Hot-reload one updated plugin: pause its enabled rows and resume them, so the
- * watched profile layer recomposes the entries. The recompose resolves the
- * package afresh — after a pnpm update the junction points at the new store
- * directory, so resolution lands on a URL the loader has never cached and
- * the updated code imports as the replacement generation. Restoration
- * restores the rows either way; a failed leg degrades to restart semantics.
+ * Pause one running plugin before its package is swapped on disk. Unmounting
+ * first matters on Windows: plugins holding fs.watch handles (skill roots,
+ * vendored directories) keep those directories undeletable, so a swap that
+ * races a live watcher dies mid-removal and guts the package. Pausing
+ * disposes the fibers — closing every watcher — before pnpm touches
+ * anything; `resume` then re-enables the rows, and the recompose resolves
+ * the swapped package afresh (a URL the loader has never cached), importing
+ * the new code as the replacement generation.
+ *
+ * Manual mounting intentionally clears every targeted disable directive;
+ * only rows enabled before the pause are touched, preserving per-row pauses
+ * (home-layer pauses and foreign managers' configuration).
+ *
+ * Returns null when there is nothing to pause (not toggleable, or nothing of
+ * it is currently running); `blocked` names a pause failure with the rows
+ * already restored.
+ */
+export async function pauseForSwap(
+  host: InstallerHost,
+  profileDirPath: string,
+  name: string,
+  timeouts: HotReloadTimeouts = {},
+): Promise<{ lease?: SwapLease; blocked?: string } | null> {
+  const rows = readMountRows(profileDirPath, name)
+  if (!rows.toggleable) return null
+  const disabledBefore = readDisabledIds(profileDirPath)
+  const swapRows = { ...rows, ids: rows.ids.filter(id => !disabledBefore.has(id)) }
+  const liveBefore = liveRowCount(host, swapRows.ids)
+  if (liveBefore === 0) return null
+  setPluginMounted(profileDirPath, swapRows, false)
+  let unloaded: boolean
+  try {
+    unloaded = await waitForRowCount(
+      host, swapRows.ids, count => count === 0,
+      timeouts.unloadTimeoutMs ?? UNLOAD_TIMEOUT_MS,
+    )
+  } catch (error) {
+    setPluginMounted(profileDirPath, swapRows, true)
+    throw error
+  }
+  if (!unloaded) {
+    setPluginMounted(profileDirPath, swapRows, true)
+    await waitForRowCount(host, swapRows.ids, count => count >= liveBefore, timeouts.loadTimeoutMs ?? LOAD_TIMEOUT_MS)
+    return { blocked: 'the running plugin did not pause in time' }
+  }
+  const lease: SwapLease = {
+    restore(): void {
+      setPluginMounted(profileDirPath, swapRows, true)
+    },
+    async resume(resumeTimeouts: HotReloadTimeouts = {}): Promise<HotReloadResult> {
+      lease.restore()
+      const reloaded = await waitForRowCount(
+        host, swapRows.ids, count => count >= liveBefore,
+        resumeTimeouts.loadTimeoutMs ?? timeouts.loadTimeoutMs ?? LOAD_TIMEOUT_MS,
+      )
+      if (!reloaded) {
+        return { hot: false, note: 'the updated plugin did not finish activating in time; restart to retry' }
+      }
+      return { hot: true }
+    },
+  }
+  return { lease }
+}
+
+/**
+ * Hot-reload one updated plugin whose swap already happened: pause its rows
+ * and resume them, so the watched profile layer recomposes the entries
+ * against the new on-disk package. Restoration restores the rows either
+ * way; a failed leg degrades to restart semantics.
  *
  * Returns null when there is nothing to hot-reload: the plugin is not
  * toggleable or nothing of it is currently running.
@@ -199,36 +270,10 @@ export async function hotReloadUpdate(
   name: string,
   timeouts: HotReloadTimeouts = {},
 ): Promise<HotReloadResult | null> {
-  const rows = readMountRows(profileDirPath, name)
-  if (!rows.toggleable) return null
-  // Manual mounting intentionally clears every targeted disable directive.
-  // Only target rows enabled before the reload, preserving per-row pauses
-  // (including home-layer pauses and foreign managers' configuration).
-  const disabledBefore = readDisabledIds(profileDirPath)
-  const reloadRows = { ...rows, ids: rows.ids.filter(id => !disabledBefore.has(id)) }
-  const liveBefore = liveRowCount(host, reloadRows.ids)
-  if (liveBefore === 0) return null
-  setPluginMounted(profileDirPath, reloadRows, false)
-  let unloaded: boolean
-  try {
-    unloaded = await waitForRowCount(
-      host, reloadRows.ids, count => count === 0,
-      timeouts.unloadTimeoutMs ?? UNLOAD_TIMEOUT_MS,
-    )
-  } finally {
-    // Restore the same enabled set on success, timeout, or polling failure.
-    setPluginMounted(profileDirPath, reloadRows, true)
-  }
-  if (!unloaded) {
-    await waitForRowCount(host, reloadRows.ids, count => count >= liveBefore, timeouts.loadTimeoutMs ?? LOAD_TIMEOUT_MS)
+  const paused = await pauseForSwap(host, profileDirPath, name, timeouts)
+  if (paused === null) return null
+  if (paused.blocked !== undefined) {
     return { hot: false, note: 'the previous generation did not unload in time; restart to activate the update' }
   }
-  const reloaded = await waitForRowCount(
-    host, reloadRows.ids, count => count >= liveBefore,
-    timeouts.loadTimeoutMs ?? LOAD_TIMEOUT_MS,
-  )
-  if (!reloaded) {
-    return { hot: false, note: 'the updated plugin did not finish activating in time; restart to retry' }
-  }
-  return { hot: true }
+  return paused.lease!.resume(timeouts)
 }

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { parse } from 'yaml'
-import { hotReloadUpdate, parseSimplePatch } from './hot.ts'
+import { hotReloadUpdate, parseSimplePatch, pauseForSwap } from './hot.ts'
 import { readDisabledIds } from './mounts.ts'
 import type { InstallerHost } from './types.ts'
 
@@ -217,6 +217,49 @@ describe('hotReloadUpdate（更新后热替换）', () => {
     try {
       await expect(hotReloadUpdate(host, root, 'fixture-group', { unloadTimeoutMs: 200, loadTimeoutMs: 200 }))
         .resolves.toBeNull()
+    } finally {
+      stop()
+    }
+  })
+
+  it('pauseForSwap keeps the plugin down until the lease resumes', async () => {
+    const { host, stop } = mirrorHost()
+    try {
+      const paused = await pauseForSwap(host, root, 'fixture-plugin', { unloadTimeoutMs: 3000, loadTimeoutMs: 3000 })
+      expect(paused?.blocked).toBeUndefined()
+      expect(paused?.lease).toBeDefined()
+      // Paused: rows disabled, nothing live — the window where pnpm may swap.
+      expect([...readDisabledIds(root)].sort()).toEqual(ids)
+      await new Promise(resolve => { setTimeout(resolve, 60) })
+      expect(host.loaderEntries()).toEqual([])
+      expect(await paused!.lease!.resume({ loadTimeoutMs: 3000 })).toEqual({ hot: true })
+      expect(readDisabledIds(root).size).toBe(0)
+      expect(host.loaderEntries().map(entry => entry.options?.id).sort()).toEqual(ids)
+    } finally {
+      stop()
+    }
+  })
+
+  it('pauseForSwap restore re-enables the rows without waiting', async () => {
+    const { host, stop } = mirrorHost()
+    try {
+      const paused = await pauseForSwap(host, root, 'fixture-plugin', { unloadTimeoutMs: 3000, loadTimeoutMs: 3000 })
+      paused!.lease!.restore()
+      await new Promise(resolve => { setTimeout(resolve, 60) })
+      expect(readDisabledIds(root).size).toBe(0)
+      expect(host.loaderEntries().map(entry => entry.options?.id).sort()).toEqual(ids)
+    } finally {
+      stop()
+    }
+  })
+
+  it('pauseForSwap reports blocked when the plugin never pauses', async () => {
+    const { host, stop } = mirrorHost('unload-timeout')
+    try {
+      const paused = await pauseForSwap(host, root, 'fixture-plugin', { unloadTimeoutMs: 350, loadTimeoutMs: 350 })
+      expect(paused?.lease).toBeUndefined()
+      expect(paused?.blocked).toContain('pause')
+      expect(readDisabledIds(root).size).toBe(0)
     } finally {
       stop()
     }
