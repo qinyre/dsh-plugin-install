@@ -58,9 +58,13 @@ describe('dshArgv（CLI 调用方式解析）', () => {
   it('resolves the bundled CLI from a desktop-style launch (Electron switches first)', () => {
     const bin = 'D:/App/resources/app.asar/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js'
     const host = 'D:/App/resources/app.asar/dsh/node_modules/@deepseek-ai/dsh-desktop-host/lib/index.js'
+    // path.resolve() prefixes drive-letter paths with the cwd on posix, so
+    // match either the bare constant (win32 absolute) or a cwd-prefixed
+    // variant (posix relative) to stay platform-independent.
+    const match = (n: string, c: string): boolean => n === c || n.endsWith('/' + c)
     const exists = (p: string): boolean => {
       const normalized = p.replace(/\\/g, '/')
-      return normalized === bin || normalized === host
+      return match(normalized, host) || match(normalized, bin)
     }
     const result = dshArgv({
       argv: ['D:/App/DeepSeek Harness.exe', '--expose-internals', host, 'D:/ws'],
@@ -69,11 +73,12 @@ describe('dshArgv（CLI 调用方式解析）', () => {
       exists,
     })
     expect(result.file).toBe('D:/App/DeepSeek Harness.exe')
-    expect(result.args).toEqual([resolve(bin)])
+    expect(result.args.map((a) => a.replace(/\\/g, '/'))).toEqual([resolve(bin).replace(/\\/g, '/')])
     expect(result.env).toEqual({ ELECTRON_RUN_AS_NODE: '1' })
     expect(result.viaShell).toBe(false)
     // The entry sits inside the asar archive; only the executable's real
-    // directory is a valid child cwd on Windows.
+    // directory is a valid child cwd on Windows. dirname() does not anchor
+    // relative-looking paths, so this holds on posix too.
     expect(result.cwd?.replace(/\\/g, '/')).toBe('D:/App')
   })
 
@@ -82,7 +87,8 @@ describe('dshArgv（CLI 调用方式解析）', () => {
     const host = 'D:/App/resources/app.asar/dsh/node_modules/@deepseek-ai/dsh-desktop-host/lib/index.js'
     const exists = (p: string): boolean => {
       const normalized = p.replace(/\\/g, '/')
-      return normalized === cli || normalized === host
+      const match = (c: string): boolean => normalized === c || normalized.endsWith('/' + c)
+      return match(host) || match(cli)
     }
     const result = dshArgv({
       argv: ['D:/App/DeepSeek Harness.exe', '--type=utility', host],
@@ -91,7 +97,7 @@ describe('dshArgv（CLI 调用方式解析）', () => {
       exists,
     })
     expect(result.file).toBe('D:/App/DeepSeek Harness.exe')
-    expect(result.args.map((a) => a.replace(/\\/g, '/'))).toEqual(['--expose-internals', cli])
+    expect(result.args.map((a) => a.replace(/\\/g, '/'))).toEqual(['--expose-internals', resolve(cli).replace(/\\/g, '/')])
     expect(result.env).toEqual({ ELECTRON_RUN_AS_NODE: '1' })
     expect(result.cwd?.replace(/\\/g, '/')).toBe('D:/App')
     expect(result.viaShell).toBe(false)
@@ -99,6 +105,7 @@ describe('dshArgv（CLI 调用方式解析）', () => {
 
   it('falls back to bare dsh via shell when no CLI layout is found', () => {
     const result = dshArgv({ argv: ['node.exe', 'server.js'], execPath: 'node.exe', execArgv: [], exists: () => false })
-    expect(result).toMatchObject({ file: 'dsh', viaShell: true })
+    // Only Windows needs the shell for the .cmd shim; posix spawns it directly.
+    expect(result).toMatchObject({ file: 'dsh', viaShell: process.platform === 'win32' })
   })
 })
