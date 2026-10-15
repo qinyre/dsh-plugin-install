@@ -37,9 +37,13 @@ export interface DshArgvOptions {
  * whether dsh runs from a global bin, a local install, repo source — or the
  * desktop host. The desktop launch carries Electron switches before the host
  * script and never names the CLI, so the CLI entry is found relative to the
- * running runtime (a dsh install's own node_modules) and executed through
- * Electron's executable as plain Node; the GUI PATH never enters the picture.
- * A bare `dsh` on the shell stays the last resort.
+ * running runtime: the desktop's own entry when present (it injects the
+ * bundled pnpm/node, exactly what runtime/cli/bin/dsh.cmd invokes), else a
+ * dsh install's bin.js — both executed through Electron's executable as plain
+ * Node with the child anchored at the executable's real directory (Windows
+ * cannot chdir inside an asar, so an archive-derived cwd kills the spawn).
+ * The GUI PATH never enters the picture. A bare `dsh` on the shell stays the
+ * last resort.
  */
 export function dshArgv(options: DshArgvOptions = {}): DshArgv {
   const argv = options.argv ?? process.argv
@@ -57,12 +61,26 @@ export function dshArgv(options: DshArgvOptions = {}): DshArgv {
     if (typeof candidate !== 'string' || !/\.[cm]?js$/.test(candidate) || !exists(candidate)) continue
     let dir = dirname(resolve(candidate))
     for (let depth = 0; depth < 6 && dir !== dirname(dir); depth++) {
-      const cliEntry = join(dir, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
+      const scoped = join(dir, 'node_modules', '@deepseek-ai')
+      // DSH Desktop ships its own CLI entry (the one runtime/cli/bin/dsh.cmd
+      // invokes): it wires the bundled pnpm and node so plugin commands never
+      // depend on the GUI PATH. Plain dsh installs only have bin.js.
+      const desktopCli = join(scoped, 'dsh-desktop-host', 'lib', 'cli.js')
+      const cliEntry = join(scoped, 'dsh', 'lib', 'bin.js')
+      if (exists(desktopCli)) {
+        return {
+          file: execPath,
+          args: [...execArgv, '--expose-internals', desktopCli],
+          cwd: dirname(execPath),
+          viaShell: false,
+          env: { ELECTRON_RUN_AS_NODE: '1' },
+        }
+      }
       if (exists(cliEntry)) {
         return {
           file: execPath,
           args: [...execArgv, cliEntry],
-          cwd: dirname(cliEntry),
+          cwd: dirname(execPath),
           viaShell: false,
           env: { ELECTRON_RUN_AS_NODE: '1' },
         }

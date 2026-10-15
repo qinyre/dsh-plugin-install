@@ -72,6 +72,29 @@ describe('dshArgv（CLI 调用方式解析）', () => {
     expect(result.args).toEqual([resolve(bin)])
     expect(result.env).toEqual({ ELECTRON_RUN_AS_NODE: '1' })
     expect(result.viaShell).toBe(false)
+    // The entry sits inside the asar archive; only the executable's real
+    // directory is a valid child cwd on Windows.
+    expect(result.cwd?.replace(/\\/g, '/')).toBe('D:/App')
+  })
+
+  it('prefers the desktop CLI entry and mirrors the official dsh.cmd invocation', () => {
+    const cli = 'D:/App/resources/app.asar/dsh/node_modules/@deepseek-ai/dsh-desktop-host/lib/cli.js'
+    const host = 'D:/App/resources/app.asar/dsh/node_modules/@deepseek-ai/dsh-desktop-host/lib/index.js'
+    const exists = (p: string): boolean => {
+      const normalized = p.replace(/\\/g, '/')
+      return normalized === cli || normalized === host
+    }
+    const result = dshArgv({
+      argv: ['D:/App/DeepSeek Harness.exe', '--type=utility', host],
+      execPath: 'D:/App/DeepSeek Harness.exe',
+      execArgv: [],
+      exists,
+    })
+    expect(result.file).toBe('D:/App/DeepSeek Harness.exe')
+    expect(result.args.map((a) => a.replace(/\\/g, '/'))).toEqual(['--expose-internals', cli])
+    expect(result.env).toEqual({ ELECTRON_RUN_AS_NODE: '1' })
+    expect(result.cwd?.replace(/\\/g, '/')).toBe('D:/App')
+    expect(result.viaShell).toBe(false)
   })
 
   it('falls back to bare dsh via shell when no CLI layout is found', () => {
