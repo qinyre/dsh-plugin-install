@@ -115,14 +115,22 @@ export function UninstallAction({ subject, t }: { subject: DetailSubject; t: Tra
   if (name === undefined || name === SELF_PACKAGE) return null
   const op = snapshot().uninstalls[name]
   const error = op !== undefined && typeof op === 'object' ? op.error : undefined
+  // The store marks a successful uninstall that left a remaining plugin
+  // unresolvable (the removal pruned a hoisted dependency) as
+  // "integrity:<pairs>" — render it as its own state, not a plain failure.
+  const integrity = error !== undefined && error.startsWith('integrity:')
+    ? error.slice('integrity:'.length)
+    : undefined
   const busy = op === 'uninstalling'
   const label = busy
     ? t('uninstalling')
-    : error !== undefined
-      ? t('uninstallFailed')
-      : confirming
-        ? t('confirmUninstall')
-        : t('forceUninstall')
+    : integrity !== undefined
+      ? t('integrityBroken')
+      : error !== undefined
+        ? t('uninstallFailed')
+        : confirming
+          ? t('confirmUninstall')
+          : t('forceUninstall')
   const onClick = (): void => {
     if (busy) return
     if (confirming) {
@@ -134,11 +142,13 @@ export function UninstallAction({ subject, t }: { subject: DetailSubject; t: Tra
     setConfirming(true)
     timerRef.current = window.setTimeout(() => { setConfirming(false) }, 5000)
   }
-  const title = error !== undefined
-    ? `${t('uninstallFailed')}: ${error}`
-    : confirming
-      ? t('confirmUninstallHint')
-      : t('forceUninstallHint')
+  const title = integrity !== undefined
+    ? `${t('integrityBroken')}: ${integrity}`
+    : error !== undefined
+      ? `${t('uninstallFailed')}: ${error}`
+      : confirming
+        ? t('confirmUninstallHint')
+        : t('forceUninstallHint')
   const Button = table.Button
   if (typeof Button !== 'function') {
     return h('button', {

@@ -8,9 +8,9 @@
  * can never leave a file colliding with the bundle layer.
  */
 
-import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readdirSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { readDisabledIds, readMountRows, setPluginMounted } from './mounts.ts'
 import { dshCliAnchor } from './cli.ts'
@@ -233,12 +233,28 @@ async function waitForRowCount(
  */
 /** The two app-boot entry points the official plugin-manager itself uses to
  * recompose the live profile tree (its reload() is exactly this call). */
+/** Inventory shape app-boot's readProfilePlugins returns; only the fields
+ * reconcileProfilePlugins reads back are declared. */
+export interface ProfilePluginInventory {
+  manifest: { dependencies?: Record<string, string>; dsh?: { profile?: { bundles?: string[] } } }
+  dependencies: Array<{ name: string; version: string; bundle: boolean; enabled: boolean }>
+}
+
 interface AppBootReconcile {
   readProfilePatches(binName: string, context: unknown): unknown[]
-  reconcileProfilePatches(ctx: unknown, patches: unknown[], binName: string, requiredIds?: string[]): Promise<unknown>
+  reconcileProfilePatches(ctx: unknown, patches: unknown[], binName: string, requiredIds?: readonly string[]): Promise<unknown>
+  readProfilePlugins?(location: { binName: string; profileDir: string; installAnchor: string }): ProfilePluginInventory
+  reconcileProfilePlugins?(options: {
+    binName: string
+    profileDir: string
+    installAnchor: string
+    before: ProfilePluginInventory
+    preserveDisabled?: boolean
+  }): unknown
 }
 
 let appBoot: AppBootReconcile | null | undefined
+let appBootFile: string | null = null
 
 /** Resolve the host's own app-boot copy, anchored at the CLI entry this host
  * booted from (the same scan dshArgv uses — including the desktop's
@@ -256,6 +272,7 @@ async function loadAppBoot(): Promise<AppBootReconcile | null> {
       appBoot = typeof mod.reconcileProfilePatches === 'function' && typeof mod.readProfilePatches === 'function'
         ? (mod as AppBootReconcile)
         : null
+      appBootFile = appBoot !== null ? file : null
     } catch {
       appBoot = null
     }
@@ -263,6 +280,74 @@ async function loadAppBoot(): Promise<AppBootReconcile | null> {
     appBoot = null
   }
   return appBoot
+}
+
+/** Profile location for app-boot's plugin reconciler. The install anchor is
+ * app-boot's own package.json: every runtime package is reachable from it by
+ * Node's lookup (the dsh installation's node_modules), matching what
+ * resolveBundleDir needs without depending on host-private path knowledge. */
+async function profileLocation(profileDirPath: string): Promise<{ binName: string; profileDir: string; installAnchor: string } | null> {
+  await loadAppBoot()
+  if (appBootFile === null) return null
+  return {
+    binName: 'dsh',
+    profileDir: profileDirPath,
+    installAnchor: join(dirname(appBootFile), 'package.json'),
+  }
+}
+
+/** Pre-removal inventory for reconcileProfilePlugins — it decides which
+ * ledger rows may drop by comparing the dependency sets before and after. */
+export async function capturePluginInventory(profileDirPath: string): Promise<ProfilePluginInventory | null> {
+  const boot = await loadAppBoot()
+  const location = await profileLocation(profileDirPath)
+  if (boot === null || location === null || boot.readProfilePlugins === undefined) return null
+  try {
+    return boot.readProfilePlugins(location)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Drop the removed plugin's ledger row the way the official manager does.
+ * The bundles list in the profile manifest is the boot's row source, and a
+ * raw package removal never updates it: the dead row survives as a boot
+ * order to import a package that no longer exists — "import failed", and on
+ * the desktop a crash dialog plus a profile-reset recovery. Prefer
+ * app-boot's reconcileProfilePlugins (same call the official uninstall
+ * uses); fall back to striking just the removed name's row when the host
+ * runtime predates it. Returns true when the manifest was rewritten.
+ */
+export async function reconcileRemovedPlugin(
+  profileDirPath: string,
+  name: string,
+  before: ProfilePluginInventory | null,
+): Promise<boolean> {
+  const boot = await loadAppBoot()
+  const location = await profileLocation(profileDirPath)
+  if (boot !== null && location !== null && boot.reconcileProfilePlugins !== undefined && before !== null) {
+    try {
+      boot.reconcileProfilePlugins({ ...location, before, preserveDisabled: true })
+      return true
+    } catch { /* fall through to the manual edit */ }
+  }
+  const manifestPath = join(profileDirPath, 'package.json')
+  if (!existsSync(manifestPath)) return false
+  try {
+    const raw = readFileSync(manifestPath, 'utf8')
+    const manifest = JSON.parse(raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw) as {
+      dependencies?: Record<string, string>
+      dsh?: { profile?: { bundles?: string[] } }
+    }
+    const bundles = manifest.dsh?.profile?.bundles
+    if (bundles === undefined || !bundles.includes(name)) return false
+    manifest.dsh = { ...manifest.dsh, profile: { ...manifest.dsh?.profile, bundles: bundles.filter(row => row !== name) } }
+    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n')
+    return true
+  } catch {
+    return false
+  }
 }
 
 /** Apply a row change to the LIVE tree the way the official manager does:

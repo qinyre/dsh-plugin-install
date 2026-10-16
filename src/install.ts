@@ -5,7 +5,8 @@ import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { runPlugin, progress, cancelActive, inDesktop } from './cli.ts'
 import { readInstalledBundles, readInstalledVersion } from './profile.ts'
-import { parseSimplePatch, hotMount, hotUnmount, listHotMounts, cleanHotDir, pauseForSwap, liveFibersForPackage, type SwapLease, type HotReloadTimeouts } from './hot.ts'
+import { parseSimplePatch, hotMount, hotUnmount, listHotMounts, cleanHotDir, pauseForSwap, liveFibersForPackage, capturePluginInventory, reconcileRemovedPlugin, type SwapLease, type HotReloadTimeouts } from './hot.ts'
+import { auditProfileTree, repairableIssues } from './integrity.ts'
 import { readMountRows, stripPluginRows } from './mounts.ts'
 import { appendCooldownExclusion } from './workspace.ts'
 import { invalidateUpdates } from './updates.ts'
@@ -30,6 +31,13 @@ export interface InstallOutcome {
   expectedVersion?: string
   /** Why an update could not be hot-reloaded and still wants a restart. */
   hotNote?: string
+  /** Post-uninstall repair outcome: requirements re-installed after the
+   * removal pruned a hoisted copy another plugin relied on, and issues that
+   * remain broken (auto-repair impossible or failed). */
+  integrity?: {
+    repaired: string[]
+    broken: Array<{ plugin: string; requirement: string }>
+  }
   stdout: string
   stderr: string
   installed: string[]
@@ -248,6 +256,9 @@ export async function uninstallPlugin(
   // The patch file disappears with the package, so read the rows before the
   // remove; leftover disable rows would ambush a future reinstall of the name.
   const mountRows = readMountRows(profileDirPath, name)
+  // Pre-removal dependency inventory: the official reconciler decides which
+  // ledger rows may drop by diffing the dependency sets across the removal.
+  const before = await capturePluginInventory(profileDirPath)
   // Pause the running generation first, exactly like an update: the removal
   // deletes the package tree, and a live fs.watch handle over any of its
   // directories makes Windows refuse the deletion mid-way — the gutted
@@ -290,9 +301,18 @@ export async function uninstallPlugin(
   // on removes too, so an in-window entry anywhere blocks the uninstall.
   const { result } = await runOpWithBypass(profile, ['remove', name])
   const ok = result.exitCode === 0 && !result.timedOut && !result.cancelled
+  let integrity: InstallOutcome['integrity']
   if (ok) {
     invalidateUpdates()
     stripPluginRows(profileDirPath, mountRows)
+    // Strike the dead ledger row before anything reboots: a bundle list
+    // naming a removed package is a boot order to import a ghost — the
+    // "import failed" crash, and on the desktop a profile-reset recovery.
+    await reconcileRemovedPlugin(profileDirPath, name, before)
+    // The removal may have pruned hoisted entries a remaining plugin was
+    // silently resolving against (peers riding a neighbour's copy); repair
+    // what an explicit install can fix before reporting success.
+    integrity = await repairTreeIntegrity(profile, profileDirPath)
   } else {
     // The package survived: bring its paused generation back.
     paused?.lease?.restore()
@@ -306,10 +326,33 @@ export async function uninstallPlugin(
     exitCode: result.exitCode,
     timedOut: result.timedOut,
     error: commandErrorText(result),
+    integrity,
     stdout: result.stdout.slice(-2000),
     stderr: result.stderr.slice(-2000),
     installed: readInstalledBundles(profileDirPath),
     live: listHotMounts(),
+  }
+}
+
+/**
+ * Audit every remaining profile-tree plugin's resolvable requirements after
+ * a removal and re-install the ones a cooldown-bypassed add can satisfy.
+ * Client injects are runtime-owned and only ever reported. Returns undefined
+ * when the tree is clean and nothing was attempted.
+ */
+async function repairTreeIntegrity(profile: string, profileDirPath: string): Promise<InstallOutcome['integrity']> {
+  const issues = auditProfileTree(profileDirPath, readInstalledBundles(profileDirPath))
+  if (issues.length === 0) return undefined
+  const repaired = new Set<string>()
+  for (const issue of repairableIssues(issues)) {
+    const { result } = await runOpWithBypass(profile, ['add', `${issue.requirement}@${issue.range}`])
+    if (result.exitCode === 0 && !result.timedOut && !result.cancelled) repaired.add(issue.requirement)
+  }
+  const broken = auditProfileTree(profileDirPath, readInstalledBundles(profileDirPath))
+  if (repaired.size === 0 && broken.length === 0) return undefined
+  return {
+    repaired: [...repaired],
+    broken: broken.map(({ plugin, requirement }) => ({ plugin, requirement })),
   }
 }
 

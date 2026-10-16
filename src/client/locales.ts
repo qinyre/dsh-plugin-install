@@ -13,6 +13,7 @@ export const zh = {
   confirmUninstall: '确认强制卸载？',
   uninstalling: '卸载中…',
   uninstallFailed: '卸载失败',
+  integrityBroken: '依赖受损',
   forceUninstallHint: '绕过发布冷静期直接卸载；官方卸载被冷静期拦截时使用',
   confirmUninstallHint: '再次点击确认卸载，该操作不可撤销',
 }
@@ -29,6 +30,7 @@ export const en = {
   confirmUninstall: 'Confirm force uninstall?',
   uninstalling: 'Uninstalling…',
   uninstallFailed: 'Uninstall failed',
+  integrityBroken: 'Dependencies broken',
   forceUninstallHint: 'Remove directly, bypassing the publish cooldown — for when the official uninstall is blocked by it',
   confirmUninstallHint: 'Click again to confirm; this cannot be undone',
 }

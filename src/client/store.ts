@@ -125,9 +125,22 @@ export async function uninstallPlugin(name: string): Promise<boolean> {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ name }),
     })
-    const body = (await response.json().catch(() => ({}))) as { ok?: boolean; error?: string }
+    const body = (await response.json().catch(() => ({}))) as {
+      ok?: boolean
+      error?: string
+      integrity?: { repaired: string[]; broken: Array<{ plugin: string; requirement: string }> }
+    }
     if (response.ok && body.ok === true) {
       await refresh(false)
+      // Uninstalled fine, but a remaining plugin lost a dependency the
+      // removal pruned and the automatic re-install could not fix: surface
+      // it instead of reloading, so the pairs stay readable.
+      const broken = body.integrity?.broken ?? []
+      if (broken.length > 0) {
+        const pairs = broken.map(entry => `${entry.plugin}→${entry.requirement}`).join(', ')
+        patch({ uninstalls: { ...snapshot().uninstalls, [name]: { error: `integrity:${pairs}` } } })
+        return false
+      }
       return true
     }
     message = body.error ?? `HTTP ${response.status}`

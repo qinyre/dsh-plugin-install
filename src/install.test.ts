@@ -4,7 +4,7 @@
  * delayed retry; everything else fails through untouched.
  */
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
@@ -140,6 +140,49 @@ describe('uninstall cooldown bypass (lockfile policy check)', () => {
     vi.mocked(runPlugin).mockReset().mockResolvedValueOnce(okRun)
     await uninstallPlugin(host, 'web', root, 'dsh-plugin-atlas')
     expect(runPlugin).toHaveBeenCalledWith('web', ['remove', '--config.minimum-release-age=0', 'dsh-plugin-atlas'])
+  })
+
+  it('strikes the removed row from the bundles ledger (app-boot absent)', async () => {
+    // A raw remove never updates the ledger; the dead row would boot as an
+    // import order for a ghost package. Without app-boot the fallback edits
+    // the manifest directly — other rows survive.
+    writeFileSync(
+      join(root, 'package.json'),
+      JSON.stringify({ name: 'dsh-profile-fixture', dependencies: {}, dsh: { profile: { bundles: ['dsh-plugin-atlas', 'keeper'] } } }),
+    )
+    vi.mocked(runPlugin).mockReset().mockResolvedValueOnce(okRun)
+    const outcome = await uninstallPlugin(host, 'web', root, 'dsh-plugin-atlas')
+    expect(outcome.ok).toBe(true)
+    const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { dsh: { profile: { bundles: string[] } } }
+    expect(manifest.dsh.profile.bundles).toEqual(['keeper'])
+    rmSync(join(root, 'package.json'), { force: true })
+  })
+
+  it('re-installs a pruned requirement of a remaining plugin and reports the residue', async () => {
+    // keeper rides a hoisted copy of its peer; the removal prunes it, the
+    // audit notices, one bypassed add restores it. The mocked add changes
+    // nothing on disk, so the re-audit still reports it broken — which is
+    // exactly the residue contract the UI surfaces.
+    const keeperDir = join(root, 'node_modules', 'keeper')
+    mkdirSync(keeperDir, { recursive: true })
+    writeFileSync(
+      join(keeperDir, 'package.json'),
+      JSON.stringify({ name: 'keeper', version: '1.0.0', peerDependencies: { '@definitely/missing-peer': '^2.0.0' } }),
+    )
+    writeFileSync(
+      join(root, 'package.json'),
+      JSON.stringify({ name: 'dsh-profile-fixture', dependencies: {}, dsh: { profile: { bundles: ['dsh-plugin-atlas', 'keeper'] } } }),
+    )
+    vi.mocked(runPlugin).mockReset().mockResolvedValueOnce(okRun).mockResolvedValueOnce(okRun)
+    const outcome = await uninstallPlugin(host, 'web', root, 'dsh-plugin-atlas')
+    expect(outcome.ok).toBe(true)
+    expect(runPlugin).toHaveBeenNthCalledWith(2, 'web', ['add', '--config.minimum-release-age=0', '@definitely/missing-peer@^2.0.0'])
+    expect(outcome.integrity).toEqual({
+      repaired: ['@definitely/missing-peer'],
+      broken: [{ plugin: 'keeper', requirement: '@definitely/missing-peer' }],
+    })
+    rmSync(keeperDir, { recursive: true, force: true })
+    rmSync(join(root, 'package.json'), { force: true })
   })
 
   it('falls back to a plain remove when pnpm rejects the flag', async () => {
