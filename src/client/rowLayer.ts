@@ -72,7 +72,15 @@ function controlFor(name: string): { label: string; disabled: boolean; title: st
     }
   }
   if (op === 'updating') return { label: t('updating'), disabled: true, title: '', kind: 'update' }
-  if (op === 'updated') return { label: t('restartShort'), disabled: false, title: '', kind: 'restart' }
+  if (op === 'updated') {
+    // Inside DSH Desktop no in-page restart exists (the shell owns it, via
+    // the tray menu), so the control degrades into a disabled note that
+    // points there instead of a button whose click would do nothing.
+    if (window.dshDesktop !== undefined) {
+      return { label: t('restartTrayLabel'), disabled: true, title: t('restartTrayTitle'), kind: 'restart' }
+    }
+    return { label: t('restartShort'), disabled: false, title: '', kind: 'restart' }
+  }
   return null
 }
 

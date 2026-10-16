@@ -68,7 +68,9 @@ export function UpdateBadge({ subject, t }: { subject: DetailSubject; t: Transla
 }
 
 /** The head-action control: 更新 while an update is available, 重启 once one
- * has been fetched and awaits the activating restart. */
+ * has been fetched and awaits the activating restart — except inside DSH
+ * Desktop, where the shell owns restarts (tray menu) and the fetched state
+ * renders as guidance instead of a button no page could honor. */
 export function UpdateAction({ subject, t }: { subject: DetailSubject; t: Translate }): ReactElement | null {
   useUpdateStore()
   const name = subject.kind === 'bundle' ? subject.pkg?.name : undefined
@@ -78,6 +80,9 @@ export function UpdateAction({ subject, t }: { subject: DetailSubject; t: Transl
   const op = state.ops[name]
   const available = status?.updateAvailable === true
   if (!available && op !== 'updated') return null
+  if (!available && window.dshDesktop !== undefined) {
+    return h('span', { title: t('restartTrayTitle'), style: { color: 'var(--dsw-alias-state-success-primary)' } }, t('restartTrayLabel'))
+  }
   const updating = available && op === 'updating'
   const error = op !== undefined && typeof op === 'object' ? op.error : undefined
   const label = available ? (updating ? t('updating') : error !== undefined ? t('updateFailed') : t('updateBtn')) : t('restartShort')

@@ -154,14 +154,13 @@ export async function uninstallPlugin(name: string): Promise<boolean> {
   return false
 }
 
-/** Restart the host so updated packages activate: the desktop shell
- * supervises its sidecar; standalone dsh relaunches through the installer's
- * relay and hands the tab a fresh tokened URL. */
+/** Restart the host so updated packages activate. Standalone dsh only: it
+ * relaunches through the installer's relay and hands the tab a fresh tokened
+ * URL. Inside DSH Desktop the shell supervises the sidecar and owns every
+ * restart (tray menu 重启服务) — the preload bridge exposes no restart call,
+ * so the UI offers guidance instead of this function there. */
 export async function restartHost(): Promise<void> {
-  if (window.dshDesktop !== undefined) {
-    window.dshDesktop.restartSidecar?.()
-    return
-  }
+  if (window.dshDesktop !== undefined) return
   const readBoot = (): Promise<string | undefined> =>
     fetch('/dsh-plugin-install/status')
       .then(response => response.json() as Promise<{ boot?: string }>)
