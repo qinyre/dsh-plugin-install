@@ -9,8 +9,11 @@
  */
 
 import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { readDisabledIds, readMountRows, setPluginMounted } from './mounts.ts'
+import { dshCliAnchor } from './cli.ts'
 import type { InstallerHost } from './types.ts'
 
 interface HotRow {
@@ -171,6 +174,12 @@ function liveRowCount(host: InstallerHost, ids: readonly string[]): number {
   let live = 0
   for (const entry of host.loaderEntries()) {
     if (entry?.options === undefined || entry.fiber === undefined || entry.fiber === null) continue
+    // Disposed/failed fibers stay parked on their entry (cordis keeps them
+    // for introspection) — only pending/active ones are running code. The
+    // numeric states mirror cordis's const enum (0 pending, 2 active,
+    // 3 failed, 4 disposed); aligned with app-boot's own mirrors.
+    const state = (entry.fiber as { state?: unknown }).state
+    if (state === 3 || state === 4) continue
     if (ids.includes(entry.options.id ?? '')) live += 1
   }
   return live
@@ -208,6 +217,59 @@ async function waitForRowCount(
  * it is currently running); `blocked` names a pause failure with the rows
  * already restored.
  */
+/** The two app-boot entry points the official plugin-manager itself uses to
+ * recompose the live profile tree (its reload() is exactly this call). */
+interface AppBootReconcile {
+  readProfilePatches(binName: string, context: unknown): unknown[]
+  reconcileProfilePatches(ctx: unknown, patches: unknown[], binName: string, requiredIds?: string[]): Promise<unknown>
+}
+
+let appBoot: AppBootReconcile | null | undefined
+
+/** Resolve the host's own app-boot copy, anchored at the CLI entry this host
+ * booted from (the same scan dshArgv uses — including the desktop's
+ * asar-packed runtime). Only the host's copy reconciles against the live
+ * Include map: any other copy (a dev checkout's node_modules, say) throws on
+ * a foreign map, so no plain-specifier fallback exists. Null when nothing
+ * resolves (0.1.x hosts, unusual launches). */
+async function loadAppBoot(): Promise<AppBootReconcile | null> {
+  if (appBoot !== undefined) return appBoot
+  const anchor = dshCliAnchor()
+  if (anchor !== undefined) {
+    try {
+      const file = createRequire(anchor.entry).resolve('@deepseek-ai/dsh-app-boot')
+      const mod = (await import(pathToFileURL(file).href)) as Partial<AppBootReconcile>
+      appBoot = typeof mod.reconcileProfilePatches === 'function' && typeof mod.readProfilePatches === 'function'
+        ? (mod as AppBootReconcile)
+        : null
+    } catch {
+      appBoot = null
+    }
+  } else {
+    appBoot = null
+  }
+  return appBoot
+}
+
+/** Apply a row change to the LIVE tree the way the official manager does:
+ * read the profile patches fresh from disk and reconcile them against the
+ * root context — nothing watches the patch file in a plain web boot (the
+ * dsh-hmr watcher only arms when its service wakes), so an explicit
+ * reconcile is what actually recomposes the fibers. Falls back to touching
+ * the hmr service (arming its watcher) on hosts without app-boot access. */
+async function applyRowChange(host: InstallerHost, requiredIds: readonly string[] = []): Promise<void> {
+  const profile = host.service?.('profileContext')
+  const boot = await loadAppBoot()
+  const root = host.root
+  if (boot !== null && profile !== undefined && root !== undefined) {
+    try {
+      await boot.reconcileProfilePatches(root, boot.readProfilePatches('dsh', profile), 'dsh', [...requiredIds])
+      return
+    } catch { /* the poll decides */ }
+  }
+  host.service?.('hmr')
+}
+
 export async function pauseForSwap(
   host: InstallerHost,
   profileDirPath: string,
@@ -221,6 +283,7 @@ export async function pauseForSwap(
   const liveBefore = liveRowCount(host, swapRows.ids)
   if (liveBefore === 0) return null
   setPluginMounted(profileDirPath, swapRows, false)
+  await applyRowChange(host)
   let unloaded: boolean
   try {
     unloaded = await waitForRowCount(
@@ -233,6 +296,7 @@ export async function pauseForSwap(
   }
   if (!unloaded) {
     setPluginMounted(profileDirPath, swapRows, true)
+    await applyRowChange(host)
     await waitForRowCount(host, swapRows.ids, count => count >= liveBefore, timeouts.loadTimeoutMs ?? LOAD_TIMEOUT_MS)
     return { blocked: 'the running plugin did not pause in time' }
   }
@@ -242,6 +306,7 @@ export async function pauseForSwap(
     },
     async resume(resumeTimeouts: HotReloadTimeouts = {}): Promise<HotReloadResult> {
       lease.restore()
+      await applyRowChange(host, swapRows.ids)
       const reloaded = await waitForRowCount(
         host, swapRows.ids, count => count >= liveBefore,
         resumeTimeouts.loadTimeoutMs ?? timeouts.loadTimeoutMs ?? LOAD_TIMEOUT_MS,

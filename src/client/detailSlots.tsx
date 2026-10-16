@@ -9,12 +9,15 @@
  * back to a plain element so a primitives rename degrades instead of
  * blanking the page (the 0.3.11 lesson). */
 
-import { createElement as h, useSyncExternalStore } from 'react'
+import { createElement as h, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { ReactElement } from 'react'
 import * as primitives from '@deepseek-ai/dsh-client-ui-primitives'
-import { snapshot, subscribe, updatePlugin, restartHost, type UpdateStatus } from './store.ts'
+import { snapshot, subscribe, updatePlugin, restartHost, uninstallPlugin, type UpdateStatus } from './store.ts'
 
 export type Translate = (key: string) => string
+
+/** This plugin's own package name — never offers to uninstall itself. */
+const SELF_PACKAGE = 'dsh-plugin-install'
 
 /** The subject a detail contribution renders with (structural subset). */
 export interface DetailSubject {
@@ -94,5 +97,63 @@ export function UpdateAction({ subject, t }: { subject: DetailSubject; t: Transl
     disabled: updating,
     title: error,
     onClick: () => { void (available ? updatePlugin(name) : restartHost()) },
+  }, label)
+}
+
+/** The head-action fallback removal control: 强制卸载 beside the official
+ * 卸载. It routes through the installer's own cooldown-free remove, so it
+ * works where the official one is refused by the bundled pnpm's whole-lockfile
+ * publish-window audit (DSH Desktop). Two clicks: the first arms a five-second
+ * confirmation, the second executes; success reloads the page so the official
+ * listing drops the row. Never offered for the installer itself. */
+export function UninstallAction({ subject, t }: { subject: DetailSubject; t: Translate }): ReactElement | null {
+  useUpdateStore()
+  const [confirming, setConfirming] = useState(false)
+  const timerRef = useRef<number | undefined>(undefined)
+  useEffect(() => () => { window.clearTimeout(timerRef.current) }, [])
+  const name = subject.kind === 'bundle' ? subject.pkg?.name : undefined
+  if (name === undefined || name === SELF_PACKAGE) return null
+  const op = snapshot().uninstalls[name]
+  const error = op !== undefined && typeof op === 'object' ? op.error : undefined
+  const busy = op === 'uninstalling'
+  const label = busy
+    ? t('uninstalling')
+    : error !== undefined
+      ? t('uninstallFailed')
+      : confirming
+        ? t('confirmUninstall')
+        : t('forceUninstall')
+  const onClick = (): void => {
+    if (busy) return
+    if (confirming) {
+      window.clearTimeout(timerRef.current)
+      setConfirming(false)
+      void uninstallPlugin(name).then((ok) => { if (ok) window.location.reload() })
+      return
+    }
+    setConfirming(true)
+    timerRef.current = window.setTimeout(() => { setConfirming(false) }, 5000)
+  }
+  const title = error !== undefined
+    ? `${t('uninstallFailed')}: ${error}`
+    : confirming
+      ? t('confirmUninstallHint')
+      : t('forceUninstallHint')
+  const Button = table.Button
+  if (typeof Button !== 'function') {
+    return h('button', {
+      type: 'button',
+      disabled: busy,
+      title,
+      onClick,
+      style: { cursor: busy ? 'default' : 'pointer' },
+    }, label)
+  }
+  return h(Button, {
+    variant: confirming ? 'danger' : undefined,
+    size: 'sm',
+    disabled: busy,
+    title,
+    onClick,
   }, label)
 }

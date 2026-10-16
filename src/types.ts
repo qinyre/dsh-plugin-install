@@ -75,4 +75,9 @@ export interface InstallerHost {
   plugin(plugin: unknown, config: unknown): { await(): Promise<unknown>; dispose(): Promise<unknown> | void }
   /** Loader entries for hot-reload polling; empty on hosts without access. */
   loaderEntries(): readonly LoaderEntryView[]
+  /** A host service by name (cordis `ctx.get`), or undefined; `profileContext`
+   * feeds the live patch reconcile. Optional for test hosts. */
+  service?(name: string): unknown
+  /** The root context (structural), for host-wide patch reconciles. */
+  root?: { get?(name: string): unknown }
 }

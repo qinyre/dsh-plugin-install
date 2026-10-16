@@ -164,7 +164,7 @@ export function mountInstallerRoutes(
           }
           installing = true
           try {
-            const outcome = await uninstallPlugin(config.profile, config.profileDirPath, name)
+            const outcome = await uninstallPlugin(host, config.profile, config.profileDirPath, name)
             // Outcome body, always 200 — see the install route.
             sendJson(response, 200, outcome)
           } finally {

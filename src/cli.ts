@@ -32,6 +32,50 @@ export interface DshArgvOptions {
   exists?: (path: string) => boolean
 }
 
+/** The CLI entry the scan below resolved, with how it will be invoked. */
+interface CliAnchor {
+  entry: string
+  /** The desktop's own CLI entry (bundled pnpm, --expose-internals). */
+  desktop: boolean
+  /** argv named the entry outright — the host re-runs it as itself. */
+  direct: boolean
+}
+
+/**
+ * Locate the dsh CLI entry this host booted from — a plain install's bin.js
+ * on argv, or (for the desktop launch, whose argv carries Electron switches
+ * before the host script and never names the CLI) the desktop's own entry
+ * next to the runtime the host script lives in. The entry anchors resolution
+ * of runtime packages (@deepseek-ai/dsh-app-boot) that live in the dsh
+ * installation tree, unreachable from a profile plugin's own module path.
+ */
+export function dshCliAnchor(options: DshArgvOptions = {}): CliAnchor | undefined {
+  const argv = options.argv ?? process.argv
+  const exists = options.exists ?? existsSync
+
+  const direct = argv[1]
+  if (direct !== undefined && /[\\/](?:bin\.(?:js|ts)|dsh)$/.test(direct)) {
+    return { entry: resolve(direct), desktop: false, direct: true }
+  }
+
+  for (const candidate of argv.slice(1)) {
+    if (typeof candidate !== 'string' || !/\.[cm]?js$/.test(candidate) || !exists(candidate)) continue
+    let dir = dirname(resolve(candidate))
+    for (let depth = 0; depth < 6 && dir !== dirname(dir); depth++) {
+      const scoped = join(dir, 'node_modules', '@deepseek-ai')
+      // DSH Desktop ships its own CLI entry (the one runtime/cli/bin/dsh.cmd
+      // invokes): it wires the bundled pnpm and node so plugin commands never
+      // depend on the GUI PATH. Plain dsh installs only have bin.js.
+      const desktopCli = join(scoped, 'dsh-desktop-host', 'lib', 'cli.js')
+      const cliEntry = join(scoped, 'dsh', 'lib', 'bin.js')
+      if (exists(desktopCli)) return { entry: desktopCli, desktop: true, direct: false }
+      if (exists(cliEntry)) return { entry: cliEntry, desktop: false, direct: false }
+      dir = dirname(dir)
+    }
+  }
+  return undefined
+}
+
 /**
  * The dsh binary invocation that launched this host, so plugin commands work
  * whether dsh runs from a global bin, a local install, repo source — or the
@@ -46,47 +90,29 @@ export interface DshArgvOptions {
  * last resort.
  */
 export function dshArgv(options: DshArgvOptions = {}): DshArgv {
-  const argv = options.argv ?? process.argv
   const execPath = options.execPath ?? process.execPath
   const execArgv = options.execArgv ?? process.execArgv
-  const exists = options.exists ?? existsSync
 
-  const entry = argv[1]
-  if (entry !== undefined && /[\\/](?:bin\.(?:js|ts)|dsh)$/.test(entry)) {
-    const abs = resolve(entry)
-    return { file: execPath, args: [...execArgv, abs], cwd: dirname(abs), viaShell: false }
-  }
-
-  for (const candidate of argv.slice(1)) {
-    if (typeof candidate !== 'string' || !/\.[cm]?js$/.test(candidate) || !exists(candidate)) continue
-    let dir = dirname(resolve(candidate))
-    for (let depth = 0; depth < 6 && dir !== dirname(dir); depth++) {
-      const scoped = join(dir, 'node_modules', '@deepseek-ai')
-      // DSH Desktop ships its own CLI entry (the one runtime/cli/bin/dsh.cmd
-      // invokes): it wires the bundled pnpm and node so plugin commands never
-      // depend on the GUI PATH. Plain dsh installs only have bin.js.
-      const desktopCli = join(scoped, 'dsh-desktop-host', 'lib', 'cli.js')
-      const cliEntry = join(scoped, 'dsh', 'lib', 'bin.js')
-      if (exists(desktopCli)) {
-        return {
-          file: execPath,
-          args: [...execArgv, '--expose-internals', desktopCli],
-          cwd: dirname(execPath),
-          viaShell: false,
-          env: { ELECTRON_RUN_AS_NODE: '1' },
-        }
-      }
-      if (exists(cliEntry)) {
-        return {
-          file: execPath,
-          args: [...execArgv, cliEntry],
-          cwd: dirname(execPath),
-          viaShell: false,
-          env: { ELECTRON_RUN_AS_NODE: '1' },
-        }
-      }
-      dir = dirname(dir)
+  const anchor = dshCliAnchor(options)
+  if (anchor !== undefined) {
+    if (anchor.direct) {
+      return { file: execPath, args: [...execArgv, anchor.entry], cwd: dirname(anchor.entry), viaShell: false }
     }
+    return anchor.desktop
+      ? {
+          file: execPath,
+          args: [...execArgv, '--expose-internals', anchor.entry],
+          cwd: dirname(execPath),
+          viaShell: false,
+          env: { ELECTRON_RUN_AS_NODE: '1' },
+        }
+      : {
+          file: execPath,
+          args: [...execArgv, anchor.entry],
+          cwd: dirname(execPath),
+          viaShell: false,
+          env: { ELECTRON_RUN_AS_NODE: '1' },
+        }
   }
 
   // Bare `dsh` is a .cmd shim on Windows; only a shell can start it.

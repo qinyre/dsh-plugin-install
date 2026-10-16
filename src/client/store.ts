@@ -16,14 +16,18 @@ export interface UpdateStatus {
 /** Per-package operation phase: updating → updated (restart pending) → done. */
 export type OpState = 'updating' | 'updated' | { error: string }
 
+/** Per-package uninstall phase; success never lands here (the page reloads). */
+export type UninstallOp = 'uninstalling' | { error: string }
+
 export interface UpdateStore {
   updates: Record<string, UpdateStatus>
   ops: Record<string, OpState>
+  uninstalls: Record<string, UninstallOp>
 }
 
 type Listener = () => void
 
-let state: UpdateStore = { updates: {}, ops: {} }
+let state: UpdateStore = { updates: {}, ops: {}, uninstalls: {} }
 const listeners = new Set<Listener>()
 
 function commit(next: UpdateStore): void {
@@ -73,7 +77,7 @@ export async function refresh(force = false): Promise<void> {
  * themselves.
  */
 export async function updatePlugin(name: string): Promise<void> {
-  if (state.ops[name] !== undefined) return
+  if (state.ops[name] === 'updating') return
   patch({ ops: { ...state.ops, [name]: 'updating' } })
   try {
     const response = await fetch('/dsh-plugin-install/update', {
@@ -100,6 +104,38 @@ function fail(name: string, message: string): void {
   // The failed op persists until the next attempt on the same package, so
   // the failure is visible (row button reads 更新失败, title carries why).
   patch({ ops: { ...snapshot().ops, [name]: { error: message } } })
+}
+
+/**
+ * Remove one package through the installer's own route — the cooldown-free
+ * channel the official page's 卸载 lacks wherever pnpm policy-audits the
+ * whole lockfile (DSH Desktop's bundled pnpm ignores the exclusion list, so
+ * its uninstall fails for as long as any lockfile entry is day-one fresh).
+ * Returns whether the removal succeeded; the caller reloads the page on
+ * success so the official listing drops the row. Errors persist in the
+ * uninstalls state for the button's tooltip.
+ */
+export async function uninstallPlugin(name: string): Promise<boolean> {
+  if (state.uninstalls[name] === 'uninstalling') return false
+  patch({ uninstalls: { ...state.uninstalls, [name]: 'uninstalling' } })
+  let message: string | undefined
+  try {
+    const response = await fetch('/dsh-plugin-install/uninstall', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name }),
+    })
+    const body = (await response.json().catch(() => ({}))) as { ok?: boolean; error?: string }
+    if (response.ok && body.ok === true) {
+      await refresh(false)
+      return true
+    }
+    message = body.error ?? `HTTP ${response.status}`
+  } catch (error) {
+    message = error instanceof Error ? error.message : String(error)
+  }
+  patch({ uninstalls: { ...snapshot().uninstalls, [name]: { error: message } } })
+  return false
 }
 
 /** Restart the host so updated packages activate: the desktop shell

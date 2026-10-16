@@ -19,7 +19,11 @@ await build({
   platform: 'node',
   target: 'node22',
   sourcemap: true,
-  external: ['@deepseek-ai/cordis'],
+  // Peers resolve against the running host's runtime copies — the app-boot
+  // import must stay external so `reconcileProfilePatches` addresses the very
+  // loader the host booted with (bundling a second copy would reconcile
+  // against a foreign Include map).
+  external: ['@deepseek-ai/cordis', '@deepseek-ai/dsh-app-boot'],
   // Bundled CommonJS dependencies (yaml) hold dynamic `require()` calls of
   // node builtins; in an ESM output esbuild's shim throws on those unless a
   // real `require` exists in module scope.

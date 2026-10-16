@@ -11,7 +11,7 @@
  * All surfaces read one shared store fed by the installer's routes
  * (/dsh-plugin-install/*), so they always agree. */
 
-import { UpdateAction, UpdateBadge } from './detailSlots.tsx'
+import { UpdateAction, UpdateBadge, UninstallAction } from './detailSlots.tsx'
 import { installNavBadge, setNavBadgeCount } from './navBadge.ts'
 import { installRowLayer } from './rowLayer.ts'
 import { refresh, subscribe, updateCount } from './store.ts'
@@ -86,5 +86,17 @@ export function apply(ctx: InstallClientContext): void {
       label: () => t('updateBtn'),
       locale: NS,
     }, UpdateAction)
+  })
+  // The cooldown-free removal channel: the official page's 卸载 is refused by
+  // the bundled pnpm's whole-lockfile publish-window audit on DSH Desktop;
+  // this fallback routes through the installer's own bypass remove.
+  ctx.slots.inject('plugins.detail.actions', () => {
+    ctx.slots.register({
+      name: 'plugins.detail.actions',
+      id: 'uninstall-action',
+      order: 21,
+      label: () => t('forceUninstall'),
+      locale: NS,
+    }, UninstallAction)
   })
 }

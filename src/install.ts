@@ -5,7 +5,7 @@ import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { runPlugin, progress, cancelActive, inDesktop } from './cli.ts'
 import { readInstalledBundles, readInstalledVersion } from './profile.ts'
-import { parseSimplePatch, hotMount, hotUnmount, listHotMounts, cleanHotDir, pauseForSwap, type SwapLease } from './hot.ts'
+import { parseSimplePatch, hotMount, hotUnmount, listHotMounts, cleanHotDir, pauseForSwap, type SwapLease, type HotReloadTimeouts } from './hot.ts'
 import { readMountRows, stripPluginRows } from './mounts.ts'
 import { appendCooldownExclusion } from './workspace.ts'
 import { invalidateUpdates } from './updates.ts'
@@ -233,15 +233,41 @@ export async function installPlugin(
   }
 }
 
-/** Remove an installed plugin by name. */
+/** Remove an installed plugin by name. The cooldown bypass makes this the
+ * working removal channel wherever pnpm policy-checks the whole lockfile and
+ * refuses — notably DSH Desktop, whose bundled pnpm audits every operation
+ * and ignores the exclusion list, so the official page's 卸载 fails for as
+ * long as any lockfile entry is inside the publish window. */
 export async function uninstallPlugin(
+  host: InstallerHost,
   profile: string,
   profileDirPath: string,
   name: string,
+  timeouts: HotReloadTimeouts = {},
 ): Promise<InstallOutcome> {
   // The patch file disappears with the package, so read the rows before the
   // remove; leftover disable rows would ambush a future reinstall of the name.
   const mountRows = readMountRows(profileDirPath, name)
+  // Pause the running generation first, exactly like an update: the removal
+  // deletes the package tree, and a live fs.watch handle over any of its
+  // directories makes Windows refuse the deletion mid-way — the gutted
+  // package. Never for the installer itself (the pause would tear down the
+  // fiber serving this very request; the files of a removed-but-running
+  // instance stay untouched in memory until the restart).
+  const paused = name === SELF_NAME ? null : await pauseForSwap(host, profileDirPath, name, timeouts)
+  if (paused?.blocked !== undefined) {
+    return {
+      ok: false,
+      hot: false,
+      exitCode: 1,
+      timedOut: false,
+      error: `${paused.blocked}; restart dsh, then uninstall again`,
+      stdout: '',
+      stderr: paused.blocked,
+      installed: readInstalledBundles(profileDirPath),
+      live: listHotMounts(),
+    }
+  }
   // Same cooldown bypass as adds: pnpm 11 policy-checks the whole lockfile
   // on removes too, so an in-window entry anywhere blocks the uninstall.
   const { result } = await runOpWithBypass(profile, ['remove', name])
@@ -249,6 +275,9 @@ export async function uninstallPlugin(
   if (ok) {
     invalidateUpdates()
     stripPluginRows(profileDirPath, mountRows)
+  } else {
+    // The package survived: bring its paused generation back.
+    paused?.lease?.restore()
   }
   let unmounted = false
   if (ok) unmounted = await hotUnmount(name)

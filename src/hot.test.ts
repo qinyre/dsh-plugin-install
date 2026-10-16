@@ -264,4 +264,20 @@ describe('hotReloadUpdate（更新后热替换）', () => {
       stop()
     }
   })
+
+  it('treats disposed and failed fibers as not live (cordis parks them on entries)', async () => {
+    // After a live reconcile, disposed fibers keep living on their entry with
+    // state 4 (failed = 3) — counting them as live would deadlock the poll.
+    const host: InstallerHost = {
+      webServer: { register: () => () => undefined },
+      plugin: () => ({ await: () => Promise.resolve(undefined), dispose: () => undefined }),
+      loaderEntries: () => [
+        { options: { id: ids[0] }, fiber: { state: 4 } },
+        { options: { id: ids[1] }, fiber: { state: 3 } },
+      ],
+    }
+    await expect(pauseForSwap(host, root, 'fixture-plugin', { unloadTimeoutMs: 200, loadTimeoutMs: 200 }))
+      .resolves.toBeNull()
+    expect(existsSync(profilePatch)).toBe(false)
+  })
 })

@@ -26,6 +26,17 @@ function asInstallerHost(ctx: Context & { webServer: WebServerService }): Instal
     webServer: shaped.webServer,
     plugin: (plugin, config) => shaped.plugin(plugin, config),
     loaderEntries: () => (shaped.loader?.entries?.() ?? []) as readonly LoaderEntryView[],
+    // Host services by name (cordis `ctx.get`) and the root context: the
+    // live patch reconcile reads `profileContext` and reconciles against the
+    // root Include tree, exactly like the official plugin-manager does.
+    service: (name) => {
+      try {
+        return (ctx as unknown as { get?: (name: string) => unknown }).get?.(name)
+      } catch {
+        return undefined
+      }
+    },
+    root: (ctx as unknown as { root?: { get?(name: string): unknown } }).root,
   }
 }
 

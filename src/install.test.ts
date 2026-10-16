@@ -4,7 +4,7 @@
  * delayed retry; everything else fails through untouched.
  */
 
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
@@ -138,7 +138,7 @@ describe('uninstall cooldown bypass (lockfile policy check)', () => {
   // (transitive deps of a pinned install) blocks the uninstall wholesale.
   it('removes with the cooldown disabled', async () => {
     vi.mocked(runPlugin).mockReset().mockResolvedValueOnce(okRun)
-    await uninstallPlugin('web', root, 'dsh-plugin-atlas')
+    await uninstallPlugin(host, 'web', root, 'dsh-plugin-atlas')
     expect(runPlugin).toHaveBeenCalledWith('web', ['remove', '--config.minimum-release-age=0', 'dsh-plugin-atlas'])
   })
 
@@ -146,10 +146,41 @@ describe('uninstall cooldown bypass (lockfile policy check)', () => {
     vi.mocked(runPlugin).mockReset()
       .mockResolvedValueOnce({ ...staleFail, stderr: "[ERROR] Unknown option: 'config.minimum-release-age'" })
       .mockResolvedValueOnce(okRun)
-    const outcome = await uninstallPlugin('web', root, 'dsh-plugin-atlas')
+    const outcome = await uninstallPlugin(host, 'web', root, 'dsh-plugin-atlas')
     expect(runPlugin).toHaveBeenCalledTimes(2)
     expect(runPlugin).toHaveBeenLastCalledWith('web', ['remove', 'dsh-plugin-atlas'])
     expect(outcome.ok).toBe(true)
+  })
+
+  it('never pauses itself — the request-serving fiber stays up', async () => {
+    const loaderEntries = vi.fn(() => [{ options: { id: 'anything' }, fiber: {} }])
+    const selfHost = { ...host, loaderEntries }
+    vi.mocked(runPlugin).mockReset().mockResolvedValueOnce(okRun)
+    const outcome = await uninstallPlugin(selfHost, 'web', root, 'dsh-plugin-install')
+    expect(outcome.ok).toBe(true)
+    expect(loaderEntries).not.toHaveBeenCalled()
+  })
+
+  it('aborts without removing when the running plugin will not pause', async () => {
+    // A toggleable row fixture so pauseForSwap actually tries to pause, and a
+    // host whose fibers never die: the pause times out, restores, and blocks.
+    const pkgDir = join(root, 'node_modules', 'dsh-plugin-atlas')
+    mkdirSync(pkgDir, { recursive: true })
+    writeFileSync(
+      join(pkgDir, 'package.json'),
+      JSON.stringify({ name: 'dsh-plugin-atlas', version: '1.0.0', dsh: { bundle: { patch: './cordis.patch.yml' } } }),
+    )
+    writeFileSync(join(pkgDir, 'cordis.patch.yml'), '- insert:\n    - id: atlas-row\n      name: dsh-plugin-atlas\n')
+    const stuckHost = {
+      ...host,
+      loaderEntries: () => [{ options: { id: 'atlas-row' }, fiber: {} }],
+    }
+    vi.mocked(runPlugin).mockReset()
+    const outcome = await uninstallPlugin(stuckHost, 'web', root, 'dsh-plugin-atlas', { unloadTimeoutMs: 150, loadTimeoutMs: 150 })
+    expect(outcome.ok).toBe(false)
+    expect(outcome.error).toContain('pause')
+    expect(runPlugin).not.toHaveBeenCalled()
+    rmSync(pkgDir, { recursive: true, force: true })
   })
 })
 
