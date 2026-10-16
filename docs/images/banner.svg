@@ -1,59 +1,43 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="300" viewBox="0 0 1280 300" role="img" aria-label="dsh-plugin-install：让每个 dsh 插件在原地看见自己的更新" font-family="'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif">
-  <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#0b1322"/>
-      <stop offset="1" stop-color="#152a4d"/>
-    </linearGradient>
-    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#4dabf7"/>
-      <stop offset="1" stop-color="#2ee6d6"/>
-    </linearGradient>
-    <radialGradient id="glowA" cx="0.92" cy="0.05" r="0.75">
-      <stop offset="0" stop-color="#2563eb" stop-opacity="0.38"/>
-      <stop offset="1" stop-color="#2563eb" stop-opacity="0"/>
-    </radialGradient>
-    <radialGradient id="glowB" cx="0.02" cy="0.98" r="0.7">
-      <stop offset="0" stop-color="#0ea5e9" stop-opacity="0.2"/>
-      <stop offset="1" stop-color="#0ea5e9" stop-opacity="0"/>
-    </radialGradient>
-    <pattern id="dots" width="26" height="26" patternUnits="userSpaceOnUse">
-      <circle cx="1.6" cy="1.6" r="1.6" fill="#3b5f8f"/>
-    </pattern>
-    <clipPath id="frame"><rect width="1280" height="300" rx="28"/></clipPath>
-  </defs>
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="400" viewBox="0 0 1280 400" role="img" aria-labelledby="title desc">
+  <title id="title">DSH Install — Plugin updates. Right here.</title>
+  <desc id="desc">dsh 插件更新工具。米白色横幅右侧展示插件列表示意：更新提示、更新按钮和已是最新状态。</desc>
+  <rect x="1" y="1" width="1278" height="398" rx="16" fill="#f5f3ed" stroke="#deded5"/>
+  <g font-family="Consolas, 'Liberation Mono', monospace" font-size="13" letter-spacing="2" fill="#67726a">
+    <text x="56" y="49">DSH / COMMUNITY PLUGINS</text>
+    <text x="1224" y="49" text-anchor="end" fill="#25745b">01 — INSTALL</text>
+  </g>
+  <g font-family="Georgia, 'Times New Roman', serif" font-size="72" letter-spacing="-2">
+    <text x="52" y="145" fill="#242e28">Plugin updates.</text>
+    <text x="52" y="222" fill="#25745b">Right here.</text>
+  </g>
+  <text x="56" y="272" fill="#5e6961" font-size="20" font-family="'Microsoft YaHei', 'PingFang SC', sans-serif">检查、更新，留在熟悉的插件页。</text>
 
-  <g clip-path="url(#frame)">
-    <rect width="1280" height="300" fill="url(#bg)"/>
-    <rect width="1280" height="300" fill="url(#glowA)"/>
-    <rect width="1280" height="300" fill="url(#glowB)"/>
-    <rect x="760" width="520" height="300" fill="url(#dots)" opacity="0.16"/>
+  <rect x="738" y="79" width="488" height="233" rx="12" fill="#e6e9e0"/>
+  <rect x="726" y="67" width="488" height="233" rx="12" fill="#fffefa" stroke="#d8ddd2"/>
+  <g font-family="'Segoe UI', sans-serif">
+    <text x="750" y="100" font-size="15" font-weight="600" fill="#27342c">Plugins</text>
+    <rect x="1112" y="82" width="78" height="24" rx="12" fill="#e9f2e8"/>
+    <text x="1151" y="98" text-anchor="middle" font-size="11" font-weight="600" fill="#25745b">1 update</text>
+    <path d="M726 116H1214M750 210H1190" stroke="#e8eae2"/>
+    <rect x="750" y="139" width="44" height="44" rx="10" fill="#e9f2e8"/>
+    <g fill="none" stroke="#25745b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M764 157h16v15h-16zM769 157v-5h6v5M769 162h6"/>
+    </g>
+    <circle cx="792" cy="141" r="5" fill="#43a577" stroke="#fffefa" stroke-width="3"/>
+    <text x="808" y="158" font-size="15" font-weight="600" fill="#27342c">dsh-plugin-capabilities</text>
+    <text x="808" y="179" font-size="12" fill="#768075">New version available</text>
+    <rect x="1112" y="146" width="78" height="32" rx="6" fill="#25745b"/>
+    <text x="1151" y="166" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">Update</text>
+    <rect x="750" y="232" width="44" height="44" rx="10" fill="#efeee7"/>
+    <path d="M763 248h18v14h-18zM761 248l4-7h14l4 7M769 254h6" fill="none" stroke="#7d8276" stroke-width="2" stroke-linejoin="round"/>
+    <text x="808" y="249" font-size="15" font-weight="600" fill="#27342c">dshmarket</text>
+    <text x="808" y="270" font-size="12" fill="#768075">Up to date</text>
+    <path d="m1163 252 5 5 9-10" fill="none" stroke="#8a9687" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
   </g>
 
-  <g transform="translate(150,150)">
-    <path d="M 95 0 A 95 95 0 1 0 22 -92.4" fill="none" stroke="url(#accent)" stroke-width="11" stroke-linecap="round"/>
-    <path d="M -14 -95 L 22 -110 L 22 -80 Z" fill="#2ee6d6"/>
-    <circle cx="95" cy="0" r="14" fill="#22c55e" stroke="#0b1322" stroke-width="5"/>
-    <rect x="-56" y="-56" width="112" height="112" rx="18" fill="#0d1e35" stroke="url(#accent)" stroke-width="3.5"/>
-    <line x1="-50" y1="-22" x2="50" y2="-22" stroke="#2c4a78" stroke-width="3"/>
-    <rect x="-16" y="8" width="60" height="12" rx="6" fill="#54749e"/>
-    <rect x="-34" y="34" width="40" height="8" rx="4" fill="#3d5d8a"/>
-  </g>
-
-  <text x="300" y="122" font-size="48" font-weight="700" letter-spacing="0.5" fill="#ecf4ff">dsh-plugin-install</text>
-  <text x="303" y="168" font-size="24" fill="#9db8d9">让每个 dsh 插件在原地看见自己的更新</text>
-
-  <g font-size="16" fill="#9fc3e8" text-anchor="middle">
-    <rect x="303" y="202" width="100" height="32" rx="16" fill="#12233f" stroke="#2c4a78" stroke-width="1.5"/>
-    <text x="353" y="223">更新绿点</text>
-    <rect x="415" y="202" width="100" height="32" rx="16" fill="#12233f" stroke="#2c4a78" stroke-width="1.5"/>
-    <text x="465" y="223">一键更新</text>
-    <rect x="527" y="202" width="100" height="32" rx="16" fill="#12233f" stroke="#2c4a78" stroke-width="1.5"/>
-    <text x="577" y="223">热替换</text>
-    <rect x="639" y="202" width="100" height="32" rx="16" fill="#12233f" stroke="#2c4a78" stroke-width="1.5"/>
-    <text x="689" y="223">兜底重启</text>
-    <rect x="751" y="202" width="100" height="32" rx="16" fill="#12233f" stroke="#2c4a78" stroke-width="1.5"/>
-    <text x="801" y="223">强制卸载</text>
-    <rect x="863" y="202" width="100" height="32" rx="16" fill="#12233f" stroke="#2c4a78" stroke-width="1.5"/>
-    <text x="913" y="223">降级防护</text>
+  <path d="M56 336H1224" stroke="#d8ddd2"/>
+  <g font-family="Consolas, 'Liberation Mono', monospace" font-size="13">
+    <text x="56" y="368" fill="#576359">dsh-plugin-install</text>
+    <text x="1224" y="368" text-anchor="end" fill="#67726a" letter-spacing="1">CHECK / UPDATE / RELOAD</text>
   </g>
 </svg>

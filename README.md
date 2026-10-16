@@ -1,44 +1,29 @@
-<div align="center">
+<p align="center">
+  <img src="docs/images/banner.svg" width="100%" alt="DSH Install — 在插件页检查更新、一键升级" />
+</p>
 
-<img src="docs/images/banner.svg" width="100%" alt="dsh-plugin-install — 让每个 dsh 插件在原地看见自己的更新" />
+<h1 align="center">dsh-plugin-install</h1>
 
-[![npm version](https://img.shields.io/npm/v/dsh-plugin-install?color=38bdf8&label=npm)](https://www.npmjs.com/package/dsh-plugin-install)
-[![downloads](https://img.shields.io/npm/d18m/dsh-plugin-install?color=38bdf8&label=downloads%20%2F%2018m)](https://www.npmjs.com/package/dsh-plugin-install)
-![dsh](https://img.shields.io/badge/requires-dsh%20%3E%3D%200.2.0-4c6ef5)
-![platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-64748b)
-[![License: MIT](https://img.shields.io/badge/license-MIT-22c55e)](./LICENSE)
+<p align="center">
+  在熟悉的插件页，完成每一次更新。<br />
+  <sub>Plugin updates, right where you need them.</sub>
+</p>
 
-**dsh 插件页的更新层。** 绿点亮起、一键更新、原地热替换。
+<p align="center">
+  <a href="https://www.npmjs.com/package/dsh-plugin-install"><img src="https://img.shields.io/npm/v/dsh-plugin-install?style=flat-square&amp;color=25745b&amp;label=npm" alt="npm 版本" /></a>
+  <a href="https://www.npmjs.com/package/dsh-plugin-install"><img src="https://img.shields.io/npm/dm/dsh-plugin-install?style=flat-square&amp;color=25745b&amp;label=downloads" alt="每月 npm 下载量" /></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-67726a?style=flat-square" alt="MIT 许可证" /></a>
+</p>
 
-<sub>Updates for every DSH plugin, right where the plugin list lives.</sub>
+<p align="center">
+  <a href="#安装">安装</a> · <a href="#使用">使用</a> · <a href="#更新机制">更新机制</a> · <a href="#开发">开发</a>
+</p>
 
-[功能总览](#功能总览) · [检测与更新规则](#检测与更新规则) · [安装](#安装) · [安全](#安全)
+---
 
-</div>
+为 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的插件页补上更新提示：列表绿点、详情页版本标签，以及一键更新按钮。
 
-## 这是什么
-
-dsh 0.2.0 起，官方插件页自带安装、卸载与启停管理，本插件随之收窄为一件事：**让每个插件在原地看见自己的更新**。安装新插件用插件页自带的「添加插件」即可；本插件不再提供独立的设置页标签。
-
-<p align="center"><img src="docs/images/screenshot-updates.png" width="88%" alt="插件页的更新提示"></p>
-
-## 功能总览
-
-| 能力 | 说明 |
-|:--|:--|
-| 🟢 **更新绿点** | 有新版本的插件在图标右上角亮起绿点，启用开关旁出现「更新」按钮；没有更新的插件不显示任何额外元素 |
-| 🏷 **详情页标签** | 点进插件详情页，标题旁挂「可更新 x.y.z」绿色标签（github 安装则提示远端有新提交），页首操作区同样提供「更新」 |
-| 🔢 **侧栏角标** | 侧栏「插件」导航行上的计数角标：有待更新插件的个数一目了然 |
-| 🔥 **热替换** | 更新完成后多数情况原地生效——正在运行的插件被自动摘下再挂上，新代码即刻加载 |
-| ♻️ **兜底重启** | 无法热替换时按钮翻转为「重启」：桌面端由壳层重启 sidecar，独立 `dsh web` 由插件接力重启，页面恢复后自动刷新 |
-| 🧹 **强制卸载** | 详情页「强制卸载」通道绕过发布冷静期直接移除——官方卸载被冷静期拦截时使用，两次点击确认，不可撤销 |
-
-## 检测与更新规则
-
-- **检测来源**：更新走的仍是 `dsh plugin add` 这条 CLI 路径——npm 安装的对照 registry 的 latest 版本号，github 安装的对照仓库 HEAD 提交，本地链接则如实标注、不做检查。
-- **方向核对**：更新前核对方向，registry 的 latest 不高于已装版本时拒绝执行，绝不把更新变成降级；更新完成后还会核对实际落地的版本号，与 registry latest 不一致时如实提示，而不是谎报成功。
-- **发布冷静期绕行**：每次 add 与 remove 都附带 `--config.minimum-release-age=0`。pnpm 11 默认开启 24 小时发布冷静期，`@latest` 会被静默解析到窗口外的旧版本，发布当天点更新等于原地不动；它还会在每次操作前对整个 lockfile 做策略校验，只要里面有窗口内发布的条目（例如显式钉版安装带进来的传递依赖），安装与卸载会一并被 `ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION` 拦死——界面上点名的操作不受这层默认限制（旧版 pnpm 不认识该参数时自动去掉重试）。
-- **热替换与重启**：落盘之后尽量原地生效——正在运行的插件被自动摘下再挂上，宿主的活重组按包名重新解析，pnpm 换盘后的新代码即刻加载，浏览器端刷新一次页面即与新版对齐。热替换不适用时（组合含无法行级停用的行、插件当前未运行、或更新的是本插件自身），按钮翻转为「重启」——桌面宿主里交由壳层重启受监督的 sidecar，独立运行 `dsh web` 时则由插件自行接力：分离的中转进程等旧进程让出端口后按原启动命令拉起新实例，终端场景下再交接回原终端。
+dsh 0.2.0 起已自带插件安装、卸载与启停管理，本插件专注于检查和更新，直接融入现有插件页。适用于 `dsh web` 及内嵌该 Web UI 的桌面端。
 
 ## 安装
 
@@ -46,21 +31,58 @@ dsh 0.2.0 起，官方插件页自带安装、卸载与启停管理，本插件�
 dsh plugin --profile web add dsh-plugin-install
 ```
 
-打开 Web UI 的插件页即可；要求 dsh 0.2.0 或更高版本。卸载执行：
+要求 **dsh ≥ 0.2.0**。安装并加载后，打开 **插件** 页面即可使用；添加新插件仍使用页面自带的「添加插件」。
 
-```sh
-dsh plugin --profile web remove dsh-plugin-install
-```
+## 使用
 
-开发时也可以直接安装本地源码检出，包内的 `prepare` 脚本会自动构建出 `lib/`：
+<p align="center">
+  <img src="docs/images/screenshot-updates.png" width="960" alt="真实插件页：capabilities 的图标带更新绿点，右侧显示「更新」按钮" />
+</p>
 
-```sh
-dsh plugin --profile web add file:/path/to/dsh-plugin-install
-```
+<p align="center"><sub>有更新才显示提示，原有的插件列表保持原样。</sub></p>
 
-## 安全
+| 在哪里 | 会看到什么 |
+| :-- | :-- |
+| 插件列表 | 有新版的插件亮起绿点，启用开关旁显示「更新」按钮 |
+| 插件详情 | 标注可更新版本；GitHub 安装的插件提示远端有新提交 |
+| 侧栏导航 | 「插件」旁显示待更新数量 |
+| 更新完成后 | 支持热替换时直接生效；否则提供「重启」按钮 |
 
-写操作设有三重防护：更新目标只能取自已安装清单；POST 请求要求同源——官方桌面壳转发而来的请求没有 Origin 头，仅当回环 Host、回环连接对端、无代理痕迹且无跨站 Sec-Fetch-Site 标记时放行；同一时刻仅允许一个安装、卸载或更新操作运行。服务本身只绑定回环地址，上述措施构成纵深防御。
+点击「更新」后，插件会先暂停运行中的目标插件，再替换包并重新挂载。不能安全暂停时会停止操作，提示先重启；更新本插件自身也需要重启。
+
+详情页还提供 **强制卸载**：官方卸载被 pnpm 发布冷静期拦截时，可从这里重试。操作需要两次点击确认；如果运行中的插件无法安全暂停，会拒绝卸载并提示先重启。
+
+## 更新机制
+
+| 安装来源 | 检查依据 |
+| :-- | :-- |
+| npm | registry 的 `latest` 版本；不高于当前版本时拒绝更新，避免降级 |
+| GitHub | 仓库 HEAD 提交 |
+| 本地链接 | 标明来源，不检查更新 |
+
+<details>
+<summary><strong>版本校验、发布冷静期与热替换</strong></summary>
+
+更新仍通过 `dsh plugin add` 执行，由 dsh CLI 维护 profile。完成后核对实际安装版本，未达到预期版本时会明确提示。
+
+安装与强制卸载会传入 `--config.minimum-release-age=0`，跳过 pnpm 的发布冷静期，避免刚发布的版本被解析成旧版，或整个 lockfile 的策略检查阻断操作。旧版 pnpm 不支持该参数时，会去掉参数重试。遇到发布后 registry 元数据尚未传播的 `ERR_PNPM_NO_VERSIONS`，会延时重试一次。
+
+热替换前先暂停目标插件，释放文件监听等资源，再让宿主按包名重新解析并挂载新代码。浏览器端刷新页面后与新版对齐。组合不支持热替换、插件未运行，或更新本插件自身时，需要重启。
+
+桌面端的重启交给壳层执行；独立运行 `dsh web` 时，由中转进程等待旧进程释放端口，再按原命令启动新实例，页面恢复后自动刷新。
+
+</details>
+
+<details>
+<summary><strong>安全与操作范围</strong></summary>
+
+更新目标只能来自已安装清单，同一时刻只允许一个安装、卸载或更新任务。
+
+写操作要求同源 POST。官方桌面壳转发的请求没有 Origin 头时，仅在 Host 与连接对端均为回环地址、没有代理痕迹，且没有跨站 `Sec-Fetch-Site` 标记的条件下放行。
+
+更新会在本机执行第三方包的代码与生命周期脚本。请只更新来源可信的插件。强制卸载跳过的是发布冷静期，仍受运行状态检查约束。
+
+</details>
 
 ## 开发
 
@@ -71,20 +93,36 @@ npm test
 npm run build
 ```
 
-端到端 smoke 默认关闭，要求同级目录下存在 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) 源码检出，且 Node ≥ 22.19：
+<details>
+<summary><strong>本地安装、端到端 smoke 与卸载</strong></summary>
+
+安装本地源码检出，`prepare` 会自动构建 `lib/`：
 
 ```sh
+dsh plugin --profile web add file:/path/to/dsh-plugin-install
+```
+
+端到端 smoke 默认关闭。需要 Node ≥ 22.19，并在同级目录准备已安装依赖的 `deepseek-harness` 源码检出。测试使用临时 `DSH_HOME` 安装插件、启动真实 `dsh web`，探测安装、卸载、取消及更新检查等路由。
+
+```sh
+# macOS / Linux
 DSH_DESKTOP_PLUGIN_SMOKE=1 npm test
 ```
 
-它会创建临时 `DSH_HOME`，将本插件安装进 `web` profile，启动 `dsh web`，并对安装、卸载、取消、更新检查等路由逐一探测。
+```powershell
+# Windows PowerShell
+$env:DSH_DESKTOP_PLUGIN_SMOKE = '1'
+npm test
+```
 
-## 许可
+卸载本插件：
 
-[MIT](./LICENSE)
+```sh
+dsh plugin --profile web remove dsh-plugin-install
+```
+
+</details>
 
 ---
 
-<div align="center">
-<sub>觉得好用的话，去 <a href="https://github.com/qinyre/dsh-plugin-install">仓库首页</a> 点一个 ⭐ Star 是最快的鼓励。</sub>
-</div>
+[技能与 MCP 管理](https://github.com/qinyre/dsh-plugin-capabilities) · [反馈问题](https://github.com/qinyre/dsh-plugin-install/issues) · [MIT License](./LICENSE)
