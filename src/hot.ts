@@ -185,6 +185,20 @@ function liveRowCount(host: InstallerHost, ids: readonly string[]): number {
   return live
 }
 
+/** Live fibers belonging to a package by name — entries carry the package
+ * name alongside their row id, so a plugin whose mount rows resist per-row
+ * targeting (a non-toggleable patch) is still visible as running. */
+export function liveFibersForPackage(host: InstallerHost, name: string): number {
+  let live = 0
+  for (const entry of host.loaderEntries()) {
+    if (entry?.options === undefined || entry.fiber === undefined || entry.fiber === null) continue
+    const state = (entry.fiber as { state?: unknown }).state
+    if (state === 3 || state === 4) continue
+    if (entry.options.name === name) live += 1
+  }
+  return live
+}
+
 async function waitForRowCount(
   host: InstallerHost,
   ids: readonly string[],

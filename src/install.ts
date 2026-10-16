@@ -5,7 +5,7 @@ import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { runPlugin, progress, cancelActive, inDesktop } from './cli.ts'
 import { readInstalledBundles, readInstalledVersion } from './profile.ts'
-import { parseSimplePatch, hotMount, hotUnmount, listHotMounts, cleanHotDir, pauseForSwap, type SwapLease, type HotReloadTimeouts } from './hot.ts'
+import { parseSimplePatch, hotMount, hotUnmount, listHotMounts, cleanHotDir, pauseForSwap, liveFibersForPackage, type SwapLease, type HotReloadTimeouts } from './hot.ts'
 import { readMountRows, stripPluginRows } from './mounts.ts'
 import { appendCooldownExclusion } from './workspace.ts'
 import { invalidateUpdates } from './updates.ts'
@@ -264,6 +264,24 @@ export async function uninstallPlugin(
       error: `${paused.blocked}; restart dsh, then uninstall again`,
       stdout: '',
       stderr: paused.blocked,
+      installed: readInstalledBundles(profileDirPath),
+      live: listHotMounts(),
+    }
+  }
+  // A non-toggleable patch (or nothing row-targetable) pauses nothing; when
+  // the plugin is nonetheless RUNNING, a package removal races its live
+  // fs.watch handles and dies mid-removal (the gutted package — Windows
+  // refuses deleting watched directories). Refuse and ask for the restart
+  // that leaves nothing watching; a not-running plugin removes cleanly.
+  if (paused === null && name !== SELF_NAME && liveFibersForPackage(host, name) > 0) {
+    return {
+      ok: false,
+      hot: false,
+      exitCode: 1,
+      timedOut: false,
+      error: 'this plugin is running and its mount rows cannot be paused individually; restart dsh, then uninstall again',
+      stdout: '',
+      stderr: 'live plugin with non-pausable mount rows',
       installed: readInstalledBundles(profileDirPath),
       live: listHotMounts(),
     }

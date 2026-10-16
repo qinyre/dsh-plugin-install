@@ -161,6 +161,31 @@ describe('uninstall cooldown bypass (lockfile policy check)', () => {
     expect(loaderEntries).not.toHaveBeenCalled()
   })
 
+  it('refuses to remove a running plugin whose mount rows cannot pause', async () => {
+    // Non-toggleable patch (no fixture package on disk) + a live fiber whose
+    // entry names the package: removing would race its watchers and gut it.
+    const liveHost = {
+      ...host,
+      loaderEntries: () => [{ options: { id: 'whatever', name: 'dsh-plugin-atlas' }, fiber: {} }],
+    }
+    vi.mocked(runPlugin).mockReset()
+    const outcome = await uninstallPlugin(liveHost, 'web', root, 'dsh-plugin-atlas', { unloadTimeoutMs: 150, loadTimeoutMs: 150 })
+    expect(outcome.ok).toBe(false)
+    expect(outcome.error).toContain('restart dsh')
+    expect(runPlugin).not.toHaveBeenCalled()
+  })
+
+  it('removes a not-running plugin even when its mount rows cannot pause', async () => {
+    const idleHost = {
+      ...host,
+      loaderEntries: () => [{ options: { id: 'other', name: 'dsh-something-else' }, fiber: {} }],
+    }
+    vi.mocked(runPlugin).mockReset().mockResolvedValueOnce(okRun)
+    const outcome = await uninstallPlugin(idleHost, 'web', root, 'dsh-plugin-atlas')
+    expect(outcome.ok).toBe(true)
+    expect(runPlugin).toHaveBeenCalledWith('web', ['remove', '--config.minimum-release-age=0', 'dsh-plugin-atlas'])
+  })
+
   it('aborts without removing when the running plugin will not pause', async () => {
     // A toggleable row fixture so pauseForSwap actually tries to pause, and a
     // host whose fibers never die: the pause times out, restores, and blocks.
