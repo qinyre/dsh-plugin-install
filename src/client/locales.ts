@@ -14,6 +14,11 @@ export const zh = {
   uninstalling: '卸载中…',
   uninstallFailed: '卸载失败',
   integrityBroken: '依赖受损',
+  reliefEnable: '解锁官方页面',
+  reliefDisable: '恢复冷静期',
+  reliefBusy: '切换中…',
+  reliefHintOff: '本插件档案中存在发布未满 24 小时的版本时，官方插件页的所有安装/卸载操作都会被 pnpm 的发布冷静期审计拦截。开启后向本档案写入 minimumReleaseAge: 0，官方页面立即恢复可用。',
+  reliefHintOn: '已解除本档案的发布冷静期拦截（minimumReleaseAge: 0）。点击恢复默认的 24 小时供应链观察期保护。',
   forceUninstallHint: '绕过发布冷静期直接卸载；官方卸载被冷静期拦截时使用',
   confirmUninstallHint: '再次点击确认卸载，该操作不可撤销',
 }
@@ -31,6 +36,11 @@ export const en = {
   uninstalling: 'Uninstalling…',
   uninstallFailed: 'Uninstall failed',
   integrityBroken: 'Dependencies broken',
+  reliefEnable: 'Unlock official page',
+  reliefDisable: 'Restore cooldown',
+  reliefBusy: 'Switching…',
+  reliefHintOff: 'While this profile holds a version published within the last 24 hours, every official-page plugin operation is refused by the release-cooldown audit of pnpm. Enabling writes minimumReleaseAge: 0 into this profile, restoring the official page at once.',
+  reliefHintOn: 'Release-cooldown enforcement is disabled for this profile (minimumReleaseAge: 0). Click to restore the default 24-hour supply-chain hold.',
   forceUninstallHint: 'Remove directly, bypassing the publish cooldown — for when the official uninstall is blocked by it',
   confirmUninstallHint: 'Click again to confirm; this cannot be undone',
 }

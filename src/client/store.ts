@@ -23,11 +23,14 @@ export interface UpdateStore {
   updates: Record<string, UpdateStatus>
   ops: Record<string, OpState>
   uninstalls: Record<string, UninstallOp>
+  /** Cooldown-relief state from the server; undefined until first fetch. */
+  relief: boolean | undefined
+  reliefBusy: boolean
 }
 
 type Listener = () => void
 
-let state: UpdateStore = { updates: {}, ops: {}, uninstalls: {} }
+let state: UpdateStore = { updates: {}, ops: {}, uninstalls: {}, relief: undefined, reliefBusy: false }
 const listeners = new Set<Listener>()
 
 function commit(next: UpdateStore): void {
@@ -191,4 +194,38 @@ export async function restartHost(): Promise<void> {
     } catch { /* no handoff: reload instead */ }
   }
   window.location.reload()
+}
+
+/** Read the cooldown-relief switch (minimumReleaseAge: 0 in the profile's
+ * pnpm-workspace.yaml, which unblocks official-channel pnpm operations for
+ * as long as the profile holds a freshly published version). */
+export async function refreshRelief(): Promise<void> {
+  try {
+    const response = await fetch('/dsh-plugin-install/cooldown-relief')
+    const body = (await response.json().catch(() => ({}))) as { enabled?: boolean }
+    if (response.ok && typeof body.enabled === 'boolean') patch({ relief: body.enabled })
+  } catch { /* offline: the last state stands */ }
+}
+
+/** Toggle the cooldown relief; returns whether the call succeeded. */
+export async function setCooldownRelief(enabled: boolean): Promise<boolean> {
+  if (state.reliefBusy) return false
+  patch({ reliefBusy: true })
+  try {
+    const response = await fetch('/dsh-plugin-install/cooldown-relief', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    })
+    const body = (await response.json().catch(() => ({}))) as { enabled?: boolean }
+    if (response.ok && typeof body.enabled === 'boolean') {
+      patch({ relief: body.enabled })
+      return true
+    }
+    return false
+  } catch {
+    return false
+  } finally {
+    patch({ reliefBusy: false })
+  }
 }

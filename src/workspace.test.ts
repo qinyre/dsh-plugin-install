@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import { parse } from 'yaml'
-import { appendCooldownExclusion } from './workspace.ts'
+import { appendCooldownExclusion, readCooldownRelief, setCooldownRelief } from './workspace.ts'
 
 describe('appendCooldownExclusion（冷却期豁免自愈）', () => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-plugin-install-workspace-'))
@@ -55,5 +55,49 @@ describe('appendCooldownExclusion（冷却期豁免自愈）', () => {
     expect(() => appendCooldownExclusion(dir, 'a', '1.0.0')).toThrow()
     expect(readFileSync(join(dir, 'pnpm-workspace.yaml'), 'utf8')).toBe(broken)
     expect(existsSync(join(dir, 'pnpm-workspace.yaml'))).toBe(true)
+  })
+})
+
+describe('cooldown relief（冷静期解锁）', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-plugin-install-relief-'))
+  afterAll(() => { rmSync(root, { recursive: true, force: true }) })
+
+  it('reports off when the key is absent, and enables by writing a zero that preserves neighbors', () => {
+    const dir = join(root, 'relief-on')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'pnpm-workspace.yaml'), [
+      'packages:',
+      '  - .',
+      'nodeLinker: hoisted',
+      'minimumReleaseAgeExclude:',
+      '  - dsh-plugin-install@0.4.10',
+      '',
+    ].join('\n'))
+    expect(readCooldownRelief(dir)).toBe(false)
+    expect(setCooldownRelief(dir, true)).toBe(true)
+    const doc = parse(readFileSync(join(dir, 'pnpm-workspace.yaml'), 'utf8'))
+    expect(doc.minimumReleaseAge).toBe(0)
+    expect(doc.packages).toEqual(['.'])
+    expect(doc.nodeLinker).toBe('hoisted')
+    expect(doc.minimumReleaseAgeExclude).toEqual(['dsh-plugin-install@0.4.10'])
+  })
+
+  it('disable removes the zero this plugin wrote', () => {
+    const dir = join(root, 'relief-off')
+    mkdirSync(dir, { recursive: true })
+    setCooldownRelief(dir, true)
+    expect(readCooldownRelief(dir)).toBe(true)
+    expect(setCooldownRelief(dir, false)).toBe(false)
+    const doc = parse(readFileSync(join(dir, 'pnpm-workspace.yaml'), 'utf8'))
+    expect(doc.minimumReleaseAge).toBeUndefined()
+  })
+
+  it('disable leaves a foreign non-zero policy untouched', () => {
+    const dir = join(root, 'relief-foreign')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'pnpm-workspace.yaml'), 'minimumReleaseAge: 3600\n')
+    expect(readCooldownRelief(dir)).toBe(false)
+    expect(setCooldownRelief(dir, false)).toBe(false)
+    expect(parse(readFileSync(join(dir, 'pnpm-workspace.yaml'), 'utf8')).minimumReleaseAge).toBe(3600)
   })
 })

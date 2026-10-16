@@ -8,6 +8,7 @@ import { readJsonBody, sameOrigin, sendJson } from './http.ts'
 import { installPlugin, uninstallPlugin, progress, cancelActive, inDesktop } from './install.ts'
 import { readInstalledBundles, readInstalledSpecs, readInstalledVersion, readPluginMeta, isLocalLink } from './profile.ts'
 import { readDisabledIds, readMountRows, setPluginMounted } from './mounts.ts'
+import { readCooldownRelief, setCooldownRelief } from './workspace.ts'
 import { checkUpdates, fetchNpmLatest, isUpgrade, cachedUpdateCount } from './updates.ts'
 import { BOOT_ID, canSelfRestart, scheduleSelfRestart, newHandoffNonce, nonceMatches, handoffWindowOpen } from './restart.ts'
 import { validateSpec } from './cli.ts'
@@ -170,6 +171,42 @@ export function mountInstallerRoutes(
           } finally {
             installing = false
           }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          sendJson(response, 500, { error: message })
+        }
+      },
+    }),
+
+    host.webServer.register({
+      kind: 'exact',
+      path: '/dsh-plugin-install/cooldown-relief',
+      handler: async (request: IncomingMessage, response: ServerResponse) => {
+        if (request.method === 'GET') {
+          try {
+            sendJson(response, 200, { enabled: readCooldownRelief(config.profileDirPath) })
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error)
+            sendJson(response, 500, { error: message })
+          }
+          return
+        }
+        if (request.method !== 'POST') {
+          response.writeHead(405, { allow: 'GET, POST' })
+          response.end()
+          return
+        }
+        if (!sameOrigin(request)) {
+          sendJson(response, 403, { error: 'untrusted origin' })
+          return
+        }
+        try {
+          const body = (await readJsonBody(request)) as { enabled?: unknown }
+          if (typeof body.enabled !== 'boolean') {
+            sendJson(response, 400, { error: 'enabled must be a boolean' })
+            return
+          }
+          sendJson(response, 200, { enabled: setCooldownRelief(config.profileDirPath, body.enabled) })
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)
           sendJson(response, 500, { error: message })

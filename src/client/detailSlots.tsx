@@ -12,7 +12,7 @@
 import { createElement as h, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { ReactElement } from 'react'
 import * as primitives from '@deepseek-ai/dsh-client-ui-primitives'
-import { snapshot, subscribe, updatePlugin, restartHost, uninstallPlugin, type UpdateStatus } from './store.ts'
+import { snapshot, subscribe, updatePlugin, restartHost, uninstallPlugin, refreshRelief, setCooldownRelief, type UpdateStatus } from './store.ts'
 
 export type Translate = (key: string) => string
 
@@ -97,6 +97,43 @@ export function UpdateAction({ subject, t }: { subject: DetailSubject; t: Transl
     disabled: updating,
     title: error,
     onClick: () => { void (available ? updatePlugin(name) : restartHost()) },
+  }, label)
+}
+
+/** The cooldown-relief toggle, offered only on this plugin's own detail
+ * page. Whenever the profile holds a version published within pnpm's 24-hour
+ * window (every self-update), the desktop's bundled pnpm refuses ALL
+ * official-channel plugin operations — its whole-lockfile audit ignores the
+ * exemption list. The switch writes minimumReleaseAge: 0 into the profile's
+ * pnpm-workspace.yaml, which every pnpm invocation in the profile reads, so
+ * the official page works again; turning it off restores the default
+ * publish-window protection. */
+export function CooldownReliefAction({ subject, t }: { subject: DetailSubject; t: Translate }): ReactElement | null {
+  useUpdateStore()
+  useEffect(() => { void refreshRelief() }, [])
+  if (subject.kind !== 'bundle' || subject.pkg?.name !== SELF_PACKAGE) return null
+  const state = snapshot()
+  if (state.relief === undefined) return null
+  const enabled = state.relief
+  const busy = state.reliefBusy
+  const label = busy ? t('reliefBusy') : enabled ? t('reliefDisable') : t('reliefEnable')
+  const title = enabled ? t('reliefHintOn') : t('reliefHintOff')
+  const Button = table.Button
+  if (typeof Button !== 'function') {
+    return h('button', {
+      type: 'button',
+      disabled: busy,
+      title,
+      onClick: () => { void setCooldownRelief(!enabled) },
+      style: { cursor: busy ? 'default' : 'pointer' },
+    }, label)
+  }
+  return h(Button, {
+    variant: enabled ? 'ghost' : 'outline',
+    size: 'sm',
+    disabled: busy,
+    title,
+    onClick: () => { void setCooldownRelief(!enabled) },
   }, label)
 }
 

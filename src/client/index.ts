@@ -11,7 +11,7 @@
  * All surfaces read one shared store fed by the installer's routes
  * (/dsh-plugin-install/*), so they always agree. */
 
-import { UpdateAction, UpdateBadge, UninstallAction } from './detailSlots.tsx'
+import { UpdateAction, UpdateBadge, UninstallAction, CooldownReliefAction } from './detailSlots.tsx'
 import { installNavBadge, setNavBadgeCount } from './navBadge.ts'
 import { installRowLayer } from './rowLayer.ts'
 import { refresh, subscribe, updateCount } from './store.ts'
@@ -98,5 +98,17 @@ export function apply(ctx: InstallClientContext): void {
       label: () => t('forceUninstall'),
       locale: NS,
     }, UninstallAction)
+  })
+  // The cooldown-relief switch on this plugin's own detail page: unblocks the
+  // official page's operations while the profile holds a freshly published
+  // version (minimumReleaseAge: 0 in the profile's pnpm-workspace.yaml).
+  ctx.slots.inject('plugins.detail.actions', () => {
+    ctx.slots.register({
+      name: 'plugins.detail.actions',
+      id: 'cooldown-relief-action',
+      order: 22,
+      label: () => t('reliefEnable'),
+      locale: NS,
+    }, CooldownReliefAction)
   })
 }

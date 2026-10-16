@@ -5,7 +5,7 @@
  * fetch helper threw the body away, and the tab showed nothing at all.
  */
 
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -241,5 +241,29 @@ describe('handoff route（重启交接换 tokened URL）', () => {
     process.env.DSH_RESTART_HANDOFF = 'right-nonce'
     const { status } = await post('/dsh-plugin-install/handoff', {}, mountRoutes(url))
     expect(status).toBe(405)
+  })
+})
+
+describe('cooldown-relief route（冷静期解锁开关）', () => {
+  afterEach(() => { rmSync(join(root, 'pnpm-workspace.yaml'), { force: true }) })
+
+  it('GET reports the current state', async () => {
+    const routes = mountRoutes()
+    expect((await get('/dsh-plugin-install/cooldown-relief', routes)).body).toEqual({ enabled: false })
+    writeFileSync(join(root, 'pnpm-workspace.yaml'), 'minimumReleaseAge: 0\n')
+    expect((await get('/dsh-plugin-install/cooldown-relief', routes)).body).toEqual({ enabled: true })
+  })
+
+  it('POST toggles the profile workspace key', async () => {
+    const routes = mountRoutes()
+    expect((await post('/dsh-plugin-install/cooldown-relief', { enabled: true }, routes)).body).toEqual({ enabled: true })
+    expect((await post('/dsh-plugin-install/cooldown-relief', { enabled: false }, routes)).body).toEqual({ enabled: false })
+    expect(existsSync(join(root, 'pnpm-workspace.yaml'))).toBe(true)
+  })
+
+  it('POST rejects a non-boolean payload', async () => {
+    const routes = mountRoutes()
+    const result = await post('/dsh-plugin-install/cooldown-relief', { enabled: 'yes' }, routes)
+    expect(result.status).toBe(400)
   })
 })
