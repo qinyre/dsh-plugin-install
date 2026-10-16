@@ -12,6 +12,8 @@
 <p align="center">
   <a href="https://www.npmjs.com/package/dsh-plugin-install"><img src="https://img.shields.io/npm/v/dsh-plugin-install?style=flat-square&amp;color=25745b&amp;label=npm" alt="npm 版本" /></a>
   <a href="https://www.npmjs.com/package/dsh-plugin-install"><img src="https://img.shields.io/npm/dm/dsh-plugin-install?style=flat-square&amp;color=25745b&amp;label=downloads" alt="每月 npm 下载量" /></a>
+  <a href="https://github.com/deepseek-ai/deepseek-harness"><img src="https://img.shields.io/badge/requires-dsh%20%3E%3D%200.2.0-25745b?style=flat-square" alt="要求的 dsh 版本" /></a>
+  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-67726a?style=flat-square" alt="支持的平台" />
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-67726a?style=flat-square" alt="MIT 许可证" /></a>
 </p>
 
